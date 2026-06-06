@@ -202,7 +202,7 @@ def _infer(
       graph_t = (strength_t > config.causal_threshold).to(torch.int64)
 
 
-    return coeffs_t.numpy(), strength_t.numpy(), graph_t.numpy()
+    return coeffs_t.numpy(), strength_t.numpy(), graph_t.cpu().numpy()
 
 
 def fit_gvar_ngc(
