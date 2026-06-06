@@ -195,10 +195,12 @@ def _infer(
 
     coeffs_t = torch.cat(coeffs_all, dim=0)
     strength_t = model.coefficient_strength(coeffs_t, aggregation=config.strength_aggregation)
-    if model.causal_gate is not None and config.causal_threshold == 0.0:
-        graph_t = model.causal_graph_from_gate(threshold=0.0)
+    
+    if model.causal_gate is not None:
+      graph_t = model.causal_graph_from_gate(threshold=config.causal_threshold)
     else:
-        graph_t = (strength_t > config.causal_threshold).to(torch.int64)
+      graph_t = (strength_t > config.causal_threshold).to(torch.int64)
+
 
     return coeffs_t.numpy(), strength_t.numpy(), graph_t.numpy()
 
