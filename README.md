@@ -84,92 +84,102 @@ print(result.causal_graph)
 
 ---
 
-## Algorithm: GVAR with NGC-style Proximal Group Sparsity
+## アルゴリズム: GVAR with NGC-style Proximal Group Sparsity
 
-本実装は、Generalized Vector Autoregression (GVAR) に Neural Granger Causality (NGC) 型の構造的スパース性を導入したモデルである。目的は、非線形・状態依存的な時系列力学を表現しつつ、Granger 非因果性に対応する係数ブロックを近接勾配法により厳密にゼロ化することである。
+本実装は、Generalized Vector Autoregression (GVAR) に Neural Granger Causality (NGC) 型の構造的スパース性を導入したモデルである。
+
+目的は、非線形かつ状態依存的な時系列ダイナミクスを表現しつつ、Granger 非因果性に対応する係数ブロックを近接勾配法により厳密にゼロ化することである。
 
 ---
 
-### 1. Model
+## 1. モデル
 
-$p$ 変量時系列を
+\(p\) 変量時系列を
 
-\[
-x_t = (x_{t,1}, \dots, x_{t,p})^\top \in \mathbb{R}^p
-\]
+$$
+x_t \in \mathbb{R}^p
+$$
 
-とする。ラグ次数を $K$ とし、入力は
+とする。自己回帰次数を \(K\) とし、時点 \(t\) におけるラグ付き入力を
 
-\[
+$$
 X_t = (x_{t-K}, \dots, x_{t-1})
-\]
+$$
 
-で与えられる。
+とする。
 
-本モデルは、各ラグ $k \in \{1,\dots,K\}$ に対して状態依存係数行列
+各ラグ \(k \in \{1,\dots,K\}\) に対して、GVAR は状態依存係数行列
 
-\[
+$$
 \Phi_k(x_{t-k}) \in \mathbb{R}^{p \times p}
-\]
+$$
 
-をニューラルネットワークにより生成する。予測値は
+をニューラルネットワークにより生成する。
 
-\[
+一歩先予測は次で定義される。
+
+$$
 \hat{x}_t
 =
 \sum_{k=1}^{K}
 \tilde{\Phi}_k(x_{t-k}) x_{t-k}
-\]
+$$
 
-で定義される。
+ここで、構造的な Granger sparsity を表す static causal gate
 
-ここで、構造的 Granger sparsity を表す gate 行列
-
-\[
+$$
 G_k \in \mathbb{R}^{p \times p}
-\]
+$$
 
-を導入し、
+を導入する。
 
-\[
+有効係数行列を
+
+$$
 \tilde{\Phi}_k(x_{t-k})
 =
 G_k \odot \Phi_k(x_{t-k})
-\]
+$$
 
-とする。$\odot$ は Hadamard 積である。
+と定義する。
 
-実装上、係数テンソルは
+ここで、\(\odot\) は Hadamard 積である。
 
-\[
-[\text{batch}, \text{lag}, \text{target}, \text{source}]
-\]
+実装上、係数テンソルは次の形を持つ。
 
-の形を持ち、gate は
+```python
+[batch, lag, target, source]
+```
 
-\[
-[\text{lag}, \text{target}, \text{source}]
-\]
+causal gate は次の形を持つ。
 
-の形を持つ。[1](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/models.py)
+```python
+[lag, target, source]
+```
 
 ---
 
-### 2. Granger Non-causality
+## 2. Granger 非因果性
 
-変数 $x_j$ が変数 $x_i$ を Granger cause しないとは、すべてのラグにおいて $x_j$ から $x_i$ への係数がゼロであることに対応する。
+変数 \(x_j\) が変数 \(x_i\) を Granger cause しないとは、すべてのラグにおいて \(x_j\) から \(x_i\) への効果がゼロであることを意味する。
 
-本モデルでは、これは gate により
+本実装では、この条件を causal gate により次のように表現する。
 
-\[
-G_{1,i,j} = G_{2,i,j} = \cdots = G_{K,i,j} = 0
-\]
+$$
+G_{1,i,j}
+=
+G_{2,i,j}
+=
+\cdots
+=
+G_{K,i,j}
+=
+0
+$$
 
-として表現される。
+したがって、推定される Granger causal graph は
 
-したがって、edge-level の Granger causal graph は
-
-\[
+$$
 \hat{A}_{i,j}
 =
 \mathbf{1}
@@ -180,19 +190,21 @@ G_{1,i,j} = G_{2,i,j} = \cdots = G_{K,i,j} = 0
 >
 \tau
 \right]
-\]
+$$
 
-で定義する。
+で定義される。
 
-実装では `gate_group_norms()` により lag 方向のノルムを計算し、`causal_graph_from_gate()` により二値グラフを得る。[1](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/models.py)
+ここで、\(\tau\) は数値誤差対策のための小さな閾値である。
+
+この定義により、edge \(j \to i\) はラグ全体を1つのグループとして選択または削除される。
 
 ---
 
-### 3. Objective Function
+## 3. 目的関数
 
-学習目的関数は以下である。
+学習目的関数は次である。
 
-\[
+$$
 \mathcal{L}
 =
 \mathcal{L}_{\mathrm{pred}}
@@ -202,154 +214,194 @@ G_{1,i,j} = G_{2,i,j} = \cdots = G_{K,i,j} = 0
 +
 \lambda_{\mathrm{ngc}}
 \mathcal{R}_{\mathrm{ngc}}
-\]
+$$
 
-ただし、ISTA optimizer を用いる場合、$\mathcal{R}_{\mathrm{ngc}}$ は勾配ステップには含めず、後続の proximal step により処理する。[2](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/training.py)
+ただし、optimizer として `ista` を用いる場合、NGC 正則化項は通常の勾配ステップには含めない。
+
+その代わり、causal gate に対して近接作用素を直接適用する。
 
 ---
 
-#### 3.1 Prediction Loss
+## 4. 予測損失
 
 予測損失は平均二乗誤差である。
 
-\[
+$$
 \mathcal{L}_{\mathrm{pred}}
 =
 \frac{1}{N}
 \sum_t
-\|x_t - \hat{x}_t\|_2^2
-\]
+\left\|
+x_t - \hat{x}_t
+\right\|_2^2
+$$
 
-実装では `nn.MSELoss(reduction="mean")` を用いる。[2](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/training.py)
+実装では次を用いる。
+
+```python
+nn.MSELoss(reduction="mean")
+```
 
 ---
 
-#### 3.2 Temporal Smoothness Penalty
+## 5. 時間方向の平滑化ペナルティ
 
-GVAR の係数は時点ごとに変化するため、隣接時点間で係数が過度に振動しないよう smoothness penalty を導入する。
+GVAR は時点ごとに状態依存係数を生成するため、係数が過度に振動しないように平滑化ペナルティを導入する。
 
-absolute mode では、
+時点 \(t\) における有効係数テンソルを \(\tilde{\Phi}_t\) と表す。
 
-\[
+absolute mode では、平滑化ペナルティは次である。
+
+$$
 \mathcal{R}_{\mathrm{smooth}}
 =
 \frac{1}{|\mathcal{T}|}
 \sum_{t \in \mathcal{T}}
-\|
-\tilde{\Phi}_{t+1} - \tilde{\Phi}_{t}
-\|_F^2
-\]
+\left\|
+\tilde{\Phi}_{t+1}
+-
+\tilde{\Phi}_t
+\right\|_F^2
+$$
 
-を用いる。
+relative mode では、係数スケールで正規化した次のペナルティを用いる。
 
-relative mode では、
-
-\[
+$$
 \mathcal{R}_{\mathrm{smooth}}
 =
 \frac{1}{|\mathcal{T}|}
 \sum_{t \in \mathcal{T}}
 \frac{
-\|
-\tilde{\Phi}_{t+1} - \tilde{\Phi}_{t}
-\|_F^2
+\left\|
+\tilde{\Phi}_{t+1}
+-
+\tilde{\Phi}_t
+\right\|_F^2
 }{
-\|\tilde{\Phi}_{t}\|_F^2 + \varepsilon
+\left\|
+\tilde{\Phi}_t
+\right\|_F^2
++
+\varepsilon
 }
-\]
+$$
 
-に対応する正規化付き penalty を用いる。
+実装では、`time_index` を用いて
 
-実装では `time_index` を用いて、隣接時点
-
-\[
+$$
 t_{r+1} - t_r = 1
-\]
+$$
 
-を満たすペアのみに smoothness penalty を課す。これにより、複数系列・複数 replicate がある場合でも、系列境界をまたいだ smoothing を避ける。[2](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/training.py)
+を満たす隣接時点のみに平滑化ペナルティを課す。
+
+これにより、複数系列や複数 replicate がある場合でも、系列境界をまたいだ smoothing を避ける。
 
 ---
 
-### 4. NGC Regularization
+## 6. NGC 正則化
 
-#### 4.1 Group Lasso
+### 6.1 Group Lasso
 
-標準設定では、各 target-source pair $(i,j)$ に対して、lag 方向の gate vector
+標準設定では、target-source pair \((i,j)\) ごとに、ラグ方向の gate vector
 
-\[
-G_{:,i,j}
+$$
+g_{i,j}
 =
 (G_{1,i,j}, \dots, G_{K,i,j})
-\]
+\in \mathbb{R}^{K}
+$$
 
 を1つのグループとして扱う。
 
 group lasso penalty は
 
-\[
+$$
 \mathcal{R}_{\mathrm{ngc}}
 =
 \sum_{i=1}^{p}
 \sum_{j=1}^{p}
 \left\|
-G_{:,i,j}
+g_{i,j}
 \right\|_2
-\]
+$$
 
 である。
 
-この penalty により、ある $(i,j)$ について全ラグの gate が同時にゼロ化される。これは
+このペナルティは、ある pair \((i,j)\) に対して、すべてのラグの gate を同時にゼロ化する方向に働く。
 
-\[
+したがって、これは Granger 非因果性
+
+$$
 x_j \not\to x_i
-\]
+$$
 
-という Granger 非因果性に対応する。[3](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/regularizers.py)
+に直接対応する。
 
 ---
 
-#### 4.2 Hierarchical Group Lasso
+### 6.2 Hierarchical Group Lasso
 
 optional に hierarchical group lasso も利用できる。
 
-実装では lag index 0 を最も古いラグと仮定し、nested prefix group
+現在の実装では、lag index \(0\) が最も古いラグに対応すると仮定している。
 
-\[
-G_{1:k,i,j}
+この仮定の下で、nested prefix group を
+
+$$
+g_{i,j}^{(k)}
 =
 (G_{1,i,j}, \dots, G_{k,i,j})
-\]
+$$
 
-に対して penalty を課す。
+と定義する。
 
-\[
+hierarchical penalty は次である。
+
+$$
 \mathcal{R}_{\mathrm{hier}}
 =
 \sum_{k=1}^{K}
 \sum_{i=1}^{p}
 \sum_{j=1}^{p}
 \left\|
-G_{1:k,i,j}
+g_{i,j}^{(k)}
 \right\|_2
-\]
+$$
 
-この形式では、古いラグほど多くの nested group に含まれるため、古いラグに対してより強い shrinkage がかかる。
+古いラグほど多くの nested group に含まれるため、古いラグに対してより強い shrinkage がかかる。
 
-注意: この解釈は、入力テンソルの lag index 0 が最古ラグである場合に成立する。[3](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/regularizers.py)
+この解釈が成立するには、データセットの lag ordering が次を満たす必要がある。
+
+```python
+inputs[:, 0, :]   = x_{t-K}
+inputs[:, K-1, :] = x_{t-1}
+```
+
+もし逆順の lag ordering を用いる場合、hierarchical penalty の方向を反転する必要がある。
 
 ---
 
-### 5. Optimization
+## 7. 最適化
 
-本実装では optimizer として `adam` または `ista` を選択できる。[2](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/training.py)
+本実装では、optimizer として次の2つを選択できる。
+
+```python
+optimizer = "adam"
+```
+
+または
+
+```python
+optimizer = "ista"
+```
 
 ---
 
-#### 5.1 Adam
+### 7.1 Adam
 
-`adam` を用いる場合、目的関数
+`adam` を用いる場合、次の目的関数全体を通常の勾配法で最適化する。
 
-\[
+$$
 \mathcal{L}
 =
 \mathcal{L}_{\mathrm{pred}}
@@ -359,177 +411,196 @@ G_{1:k,i,j}
 +
 \lambda_{\mathrm{ngc}}
 \mathcal{R}_{\mathrm{ngc}}
-\]
+$$
 
-全体に対して通常の勾配更新を行う。
+ただし、Adam では causal gate が厳密にゼロになりにくい。
 
-ただし、この場合 gate は厳密にゼロになりにくく、exact sparsity は保証されない。
+したがって、exact sparsity を重視する場合は `ista` を用いる。
 
 ---
 
-#### 5.2 ISTA / Proximal Gradient
+### 7.2 ISTA / Proximal Gradient
 
-`ista` を用いる場合、まず smooth な項
+`ista` を用いる場合、まず smooth part のみに対して勾配ステップを行う。
 
-\[
-\mathcal{L}_{\mathrm{smooth-part}}
+$$
+\mathcal{L}_{\mathrm{smooth\mbox{-}part}}
 =
 \mathcal{L}_{\mathrm{pred}}
 +
 \lambda_{\mathrm{smooth}}
 \mathcal{R}_{\mathrm{smooth}}
-\]
+$$
 
-に対して勾配ステップを行う。
+勾配ステップは次である。
 
-\[
+$$
 \theta^{(m+1/2)}
 =
 \theta^{(m)}
 -
 \eta
-\nabla_\theta
-\mathcal{L}_{\mathrm{smooth-part}}
-\]
+\nabla_{\theta}
+\mathcal{L}_{\mathrm{smooth\mbox{-}part}}
+$$
 
-その後、gate parameter $G$ に対して proximal operator を適用する。
+その後、causal gate \(G\) に対して近接作用素を適用する。
 
-\[
+$$
 G^{(m+1)}
 =
-\mathrm{prox}_{\eta \lambda_{\mathrm{ngc}} \mathcal{R}_{\mathrm{ngc}}}
+\operatorname{prox}_{
+\eta \lambda_{\mathrm{ngc}} \mathcal{R}_{\mathrm{ngc}}
+}
 \left(
 G^{(m+1/2)}
 \right)
-\]
+$$
 
-実装では、通常のネットワークパラメータには SGD step を行い、その後 `ngc.prox_(model.causal_gate, learning_rate)` により gate のみ proximal update を行う。[2](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/training.py)
+この近接更新により、causal gate に厳密なゼロが生じる。
 
 ---
 
-### 6. Proximal Operator for Group Lasso
+## 8. Group Lasso の近接作用素
 
-group lasso の proximal operator は group soft-thresholding である。
+各 pair \((i,j)\) に対して
 
-各 pair $(i,j)$ について
-
-\[
+$$
 g_{i,j}
 =
 (G_{1,i,j}, \dots, G_{K,i,j})
-\in \mathbb{R}^{K}
-\]
+$$
 
-とする。このとき proximal update は
+とする。
 
-\[
+group lasso の近接作用素は group soft-thresholding であり、次で与えられる。
+
+$$
 g_{i,j}
 \leftarrow
 \left(
 1
 -
-\frac{\eta \lambda_{\mathrm{ngc}}}
-{
-\|g_{i,j}\|_2
+\frac{
+\eta \lambda_{\mathrm{ngc}}
+}{
+\left\|
+g_{i,j}
+\right\|_2
 }
 \right)_+
 g_{i,j}
-\]
+$$
 
-である。
+ここで、
 
-ここで
-
-\[
+$$
 (a)_+ = \max(a,0)
-\]
+$$
 
 である。
 
-したがって、
+もし
 
-\[
-\|g_{i,j}\|_2
+$$
+\left\|
+g_{i,j}
+\right\|_2
 \le
 \eta \lambda_{\mathrm{ngc}}
-\]
+$$
 
 ならば、
 
-\[
+$$
 g_{i,j} = 0
-\]
+$$
 
 となる。
 
-これにより、Granger graph の edge を厳密にゼロ化できる。[3](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/regularizers.py)
+したがって、edge \(j \to i\) は厳密に削除される。
 
 ---
 
-### 7. Graph Inference
+## 9. Graph Inference
 
-学習後、係数テンソル
+学習後、モデルは全データに対して有効係数テンソルを計算する。
 
-\[
-\tilde{\Phi}
-\]
+係数ベースの causal strength は、係数の絶対値を batch 方向および lag 方向に集約して得る。
 
-を全データに対して計算する。
+max aggregation の場合、
 
-causal strength は、係数の絶対値を batch および lag 方向に集約して得る。
-
-例えば max aggregation の場合、
-
-\[
+$$
 S_{i,j}
 =
 \max_{t,k}
-|
+\left|
 \tilde{\Phi}_{k,i,j}(x_{t-k})
-|
-\]
+\right|
+$$
 
 である。
 
-ただし、最終的な causal graph は coefficient strength ではなく、原則として gate から得る。
+ただし、causal gate が存在する場合、最終的な causal graph は coefficient thresholding ではなく gate norm から推定する。
 
-\[
+$$
 \hat{A}_{i,j}
 =
 \mathbf{1}
 \left[
-\|G_{:,i,j}\|_2 > \tau
+\left\|
+g_{i,j}
+\right\|_2
+>
+\tau
 \right]
-\]
+$$
 
-実装では、`causal_gate` が存在する場合は `causal_graph_from_gate()` を優先し、gate が存在しない場合のみ coefficient strength を thresholding する。[2](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/training.py)[1](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/models.py)
+causal gate が存在しない場合のみ、coefficient strength を thresholding する。
+
+$$
+\hat{A}_{i,j}
+=
+\mathbf{1}
+[
+S_{i,j} > \tau
+]
+$$
 
 ---
 
-### 8. Parameter Groups
+## 10. Parameter Groups
 
-optimizer では、coefficient network parameters と gate parameters を分離する。
+optimizer では、パラメータを次の2グループに分ける。
 
-coefficient network には optional に weight decay を適用する。
+```python
+coefficient_network_parameters
+causal_gate_parameters
+```
 
-\[
+coefficient-generating neural networks には optional に weight decay を適用できる。
+
+$$
 \lambda_{\mathrm{wd}}
-\|\theta_{\Phi}\|_2^2
-\]
+\left\|
+\theta_{\Phi}
+\right\|_2^2
+$$
 
-一方、gate parameter には weight decay を適用しない。
+一方で、causal gate には weight decay を適用しない。
 
-これは、gate の sparsity を weight decay ではなく proximal operator によって制御するためである。[2](https://msotohoku-my.sharepoint.com/personal/kurita_koya_r6_mso_tohoku_ac_jp/Documents/Microsoft%20Copilot%20Chat%20%E3%83%95%E3%82%A1%E3%82%A4%E3%83%AB/training.py)
+causal gate の sparsity は通常の weight decay ではなく、近接作用素により制御する。
 
 ---
 
-### 9. Summary
+## 11. まとめ
 
-本アルゴリズムの特徴は以下である。
+本アルゴリズムの特徴は次の通りである。
 
-1. GVAR により、状態依存的な非線形時系列力学を表現する。
-2. static gate により、Granger causal structure と dynamic coefficient を分離する。
-3. group lasso により、全ラグにわたる Granger edge を1つの単位として正則化する。
-4. proximal gradient により、Granger 非因果性に対応する gate block を厳密にゼロ化する。
-5. temporal smoothness penalty により、状態依存係数の過度な時間変動を抑制する。
-6. 推論時には coefficient threshold ではなく gate norm に基づいて causal graph を構成する。
+1. GVAR により、非線形かつ状態依存的な自己回帰ダイナミクスを表現する。
+2. static causal gate により、構造的 Granger sparsity と動的係数変動を分離する。
+3. group lasso により、1つの target-source pair の全ラグを1つの Granger edge として扱う。
+4. proximal gradient update により、causal gate に厳密なゼロを生成する。
+5. gate group が厳密にゼロであることは Granger 非因果性に対応する。
+6. temporal smoothness regularization により、状態依存係数の過度な時間変動を抑制する。
+7. causal gate が存在する場合、最終的な causal graph は gate norm に基づいて推定する。
