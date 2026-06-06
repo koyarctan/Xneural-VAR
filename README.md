@@ -94,56 +94,48 @@ print(result.causal_graph)
 
 ## 1. モデル
 
-\(p\) 変量時系列を
+`p` 変量時系列を次のように表す。
 
-$$
+```math
 x_t \in \mathbb{R}^p
-$$
+```
 
-とする。自己回帰次数を \(K\) とし、時点 \(t\) におけるラグ付き入力を
+自己回帰次数を `K` とし、時点 `t` におけるラグ付き入力を次のように定義する。
 
-$$
+```math
 X_t = (x_{t-K}, \dots, x_{t-1})
-$$
+```
 
-とする。
+各ラグ `k = 1, ..., K` に対して、GVAR は状態依存係数行列をニューラルネットワークにより生成する。
 
-各ラグ \(k \in \{1,\dots,K\}\) に対して、GVAR は状態依存係数行列
-
-$$
+```math
 \Phi_k(x_{t-k}) \in \mathbb{R}^{p \times p}
-$$
-
-をニューラルネットワークにより生成する。
+```
 
 一歩先予測は次で定義される。
 
-$$
+```math
 \hat{x}_t
 =
 \sum_{k=1}^{K}
 \tilde{\Phi}_k(x_{t-k}) x_{t-k}
-$$
+```
 
-ここで、構造的な Granger sparsity を表す static causal gate
+ここで、構造的な Granger sparsity を表す static causal gate を導入する。
 
-$$
+```math
 G_k \in \mathbb{R}^{p \times p}
-$$
+```
 
-を導入する。
+有効係数行列を次で定義する。
 
-有効係数行列を
-
-$$
+```math
 \tilde{\Phi}_k(x_{t-k})
 =
 G_k \odot \Phi_k(x_{t-k})
-$$
+```
 
-と定義する。
-
-ここで、\(\odot\) は Hadamard 積である。
+ここで、`⊙` は Hadamard 積である。
 
 実装上、係数テンソルは次の形を持つ。
 
@@ -161,11 +153,11 @@ causal gate は次の形を持つ。
 
 ## 2. Granger 非因果性
 
-変数 \(x_j\) が変数 \(x_i\) を Granger cause しないとは、すべてのラグにおいて \(x_j\) から \(x_i\) への効果がゼロであることを意味する。
+変数 `x_j` が変数 `x_i` を Granger cause しないとは、すべてのラグにおいて `x_j` から `x_i` への効果がゼロであることを意味する。
 
 本実装では、この条件を causal gate により次のように表現する。
 
-$$
+```math
 G_{1,i,j}
 =
 G_{2,i,j}
@@ -175,11 +167,11 @@ G_{2,i,j}
 G_{K,i,j}
 =
 0
-$$
+```
 
-したがって、推定される Granger causal graph は
+したがって、推定される Granger causal graph は次で定義される。
 
-$$
+```math
 \hat{A}_{i,j}
 =
 \mathbf{1}
@@ -190,13 +182,11 @@ $$
 >
 \tau
 \right]
-$$
+```
 
-で定義される。
+ここで、`\tau` は数値誤差対策のための小さな閾値である。
 
-ここで、\(\tau\) は数値誤差対策のための小さな閾値である。
-
-この定義により、edge \(j \to i\) はラグ全体を1つのグループとして選択または削除される。
+この定義により、edge `j -> i` はラグ全体を1つのグループとして選択または削除される。
 
 ---
 
@@ -204,7 +194,7 @@ $$
 
 学習目的関数は次である。
 
-$$
+```math
 \mathcal{L}
 =
 \mathcal{L}_{\mathrm{pred}}
@@ -214,7 +204,7 @@ $$
 +
 \lambda_{\mathrm{ngc}}
 \mathcal{R}_{\mathrm{ngc}}
-$$
+```
 
 ただし、optimizer として `ista` を用いる場合、NGC 正則化項は通常の勾配ステップには含めない。
 
@@ -226,7 +216,7 @@ $$
 
 予測損失は平均二乗誤差である。
 
-$$
+```math
 \mathcal{L}_{\mathrm{pred}}
 =
 \frac{1}{N}
@@ -234,7 +224,7 @@ $$
 \left\|
 x_t - \hat{x}_t
 \right\|_2^2
-$$
+```
 
 実装では次を用いる。
 
@@ -248,11 +238,11 @@ nn.MSELoss(reduction="mean")
 
 GVAR は時点ごとに状態依存係数を生成するため、係数が過度に振動しないように平滑化ペナルティを導入する。
 
-時点 \(t\) における有効係数テンソルを \(\tilde{\Phi}_t\) と表す。
+時点 `t` における有効係数テンソルを `\tilde{\Phi}_t` と表す。
 
 absolute mode では、平滑化ペナルティは次である。
 
-$$
+```math
 \mathcal{R}_{\mathrm{smooth}}
 =
 \frac{1}{|\mathcal{T}|}
@@ -262,11 +252,11 @@ $$
 -
 \tilde{\Phi}_t
 \right\|_F^2
-$$
+```
 
 relative mode では、係数スケールで正規化した次のペナルティを用いる。
 
-$$
+```math
 \mathcal{R}_{\mathrm{smooth}}
 =
 \frac{1}{|\mathcal{T}|}
@@ -284,15 +274,13 @@ $$
 +
 \varepsilon
 }
-$$
+```
 
-実装では、`time_index` を用いて
+実装では、`time_index` を用いて次を満たす隣接時点のみに平滑化ペナルティを課す。
 
-$$
+```math
 t_{r+1} - t_r = 1
-$$
-
-を満たす隣接時点のみに平滑化ペナルティを課す。
+```
 
 これにより、複数系列や複数 replicate がある場合でも、系列境界をまたいだ smoothing を避ける。
 
@@ -302,20 +290,18 @@ $$
 
 ### 6.1 Group Lasso
 
-標準設定では、target-source pair \((i,j)\) ごとに、ラグ方向の gate vector
+標準設定では、target-source pair `(i, j)` ごとに、ラグ方向の gate vector を1つのグループとして扱う。
 
-$$
+```math
 g_{i,j}
 =
 (G_{1,i,j}, \dots, G_{K,i,j})
 \in \mathbb{R}^{K}
-$$
+```
 
-を1つのグループとして扱う。
+group lasso penalty は次である。
 
-group lasso penalty は
-
-$$
+```math
 \mathcal{R}_{\mathrm{ngc}}
 =
 \sum_{i=1}^{p}
@@ -323,19 +309,15 @@ $$
 \left\|
 g_{i,j}
 \right\|_2
-$$
+```
 
-である。
+このペナルティは、ある pair `(i, j)` に対して、すべてのラグの gate を同時にゼロ化する方向に働く。
 
-このペナルティは、ある pair \((i,j)\) に対して、すべてのラグの gate を同時にゼロ化する方向に働く。
+したがって、これは Granger 非因果性に直接対応する。
 
-したがって、これは Granger 非因果性
-
-$$
+```math
 x_j \not\to x_i
-$$
-
-に直接対応する。
+```
 
 ---
 
@@ -343,21 +325,19 @@ $$
 
 optional に hierarchical group lasso も利用できる。
 
-現在の実装では、lag index \(0\) が最も古いラグに対応すると仮定している。
+現在の実装では、lag index `0` が最も古いラグに対応すると仮定している。
 
-この仮定の下で、nested prefix group を
+この仮定の下で、nested prefix group を次のように定義する。
 
-$$
+```math
 g_{i,j}^{(k)}
 =
 (G_{1,i,j}, \dots, G_{k,i,j})
-$$
-
-と定義する。
+```
 
 hierarchical penalty は次である。
 
-$$
+```math
 \mathcal{R}_{\mathrm{hier}}
 =
 \sum_{k=1}^{K}
@@ -366,7 +346,7 @@ $$
 \left\|
 g_{i,j}^{(k)}
 \right\|_2
-$$
+```
 
 古いラグほど多くの nested group に含まれるため、古いラグに対してより強い shrinkage がかかる。
 
@@ -395,13 +375,11 @@ optimizer = "adam"
 optimizer = "ista"
 ```
 
----
-
 ### 7.1 Adam
 
 `adam` を用いる場合、次の目的関数全体を通常の勾配法で最適化する。
 
-$$
+```math
 \mathcal{L}
 =
 \mathcal{L}_{\mathrm{pred}}
@@ -411,7 +389,7 @@ $$
 +
 \lambda_{\mathrm{ngc}}
 \mathcal{R}_{\mathrm{ngc}}
-$$
+```
 
 ただし、Adam では causal gate が厳密にゼロになりにくい。
 
@@ -423,30 +401,30 @@ $$
 
 `ista` を用いる場合、まず smooth part のみに対して勾配ステップを行う。
 
-$$
-\mathcal{L}_{\mathrm{smooth\mbox{-}part}}
+```math
+\mathcal{L}_{\mathrm{smooth\text{-}part}}
 =
 \mathcal{L}_{\mathrm{pred}}
 +
 \lambda_{\mathrm{smooth}}
 \mathcal{R}_{\mathrm{smooth}}
-$$
+```
 
 勾配ステップは次である。
 
-$$
+```math
 \theta^{(m+1/2)}
 =
 \theta^{(m)}
 -
 \eta
 \nabla_{\theta}
-\mathcal{L}_{\mathrm{smooth\mbox{-}part}}
-$$
+\mathcal{L}_{\mathrm{smooth\text{-}part}}
+```
 
-その後、causal gate \(G\) に対して近接作用素を適用する。
+その後、causal gate `G` に対して近接作用素を適用する。
 
-$$
+```math
 G^{(m+1)}
 =
 \operatorname{prox}_{
@@ -455,7 +433,7 @@ G^{(m+1)}
 \left(
 G^{(m+1/2)}
 \right)
-$$
+```
 
 この近接更新により、causal gate に厳密なゼロが生じる。
 
@@ -463,19 +441,17 @@ $$
 
 ## 8. Group Lasso の近接作用素
 
-各 pair \((i,j)\) に対して
+各 pair `(i, j)` に対して次の gate vector を考える。
 
-$$
+```math
 g_{i,j}
 =
 (G_{1,i,j}, \dots, G_{K,i,j})
-$$
-
-とする。
+```
 
 group lasso の近接作用素は group soft-thresholding であり、次で与えられる。
 
-$$
+```math
 g_{i,j}
 \leftarrow
 \left(
@@ -490,35 +466,31 @@ g_{i,j}
 }
 \right)_+
 g_{i,j}
-$$
+```
 
-ここで、
+ここで、次を定義する。
 
-$$
+```math
 (a)_+ = \max(a,0)
-$$
+```
 
-である。
+もし次を満たすならば、
 
-もし
-
-$$
+```math
 \left\|
 g_{i,j}
 \right\|_2
 \le
 \eta \lambda_{\mathrm{ngc}}
-$$
+```
 
-ならば、
+次が成り立つ。
 
-$$
+```math
 g_{i,j} = 0
-$$
+```
 
-となる。
-
-したがって、edge \(j \to i\) は厳密に削除される。
+したがって、edge `j -> i` は厳密に削除される。
 
 ---
 
@@ -528,22 +500,20 @@ $$
 
 係数ベースの causal strength は、係数の絶対値を batch 方向および lag 方向に集約して得る。
 
-max aggregation の場合、
+max aggregation の場合、causal strength は次である。
 
-$$
+```math
 S_{i,j}
 =
 \max_{t,k}
 \left|
 \tilde{\Phi}_{k,i,j}(x_{t-k})
 \right|
-$$
-
-である。
+```
 
 ただし、causal gate が存在する場合、最終的な causal graph は coefficient thresholding ではなく gate norm から推定する。
 
-$$
+```math
 \hat{A}_{i,j}
 =
 \mathbf{1}
@@ -554,18 +524,18 @@ g_{i,j}
 >
 \tau
 \right]
-$$
+```
 
 causal gate が存在しない場合のみ、coefficient strength を thresholding する。
 
-$$
+```math
 \hat{A}_{i,j}
 =
 \mathbf{1}
 [
 S_{i,j} > \tau
 ]
-$$
+```
 
 ---
 
@@ -580,12 +550,12 @@ causal_gate_parameters
 
 coefficient-generating neural networks には optional に weight decay を適用できる。
 
-$$
+```math
 \lambda_{\mathrm{wd}}
 \left\|
 \theta_{\Phi}
 \right\|_2^2
-$$
+```
 
 一方で、causal gate には weight decay を適用しない。
 
