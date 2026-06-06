@@ -427,7 +427,7 @@ optimizer = "ista"
 ```math
 G^{(m+1)}
 =
-\operatorname{prox}_{
+\mathrm{prox}_{
 \eta \lambda_{\mathrm{ngc}} \mathcal{R}_{\mathrm{ngc}}
 }
 \left(
