@@ -13,8 +13,11 @@ __all__ = [
     "fit_gvar_ngc",
     "group_lasso_penalty",
     "hierarchical_group_lasso_penalty",
+    "prox_lasso_",
     "prox_group_lasso_",
     "prox_hierarchical_group_lasso_",
+    "prox_sparse_group_lasso_",
+    "sparse_group_lasso_penalty",
 ]
 
 _LAZY_ATTRS = {
@@ -29,11 +32,14 @@ _LAZY_ATTRS = {
         "xneural_var.regularizers",
         "hierarchical_group_lasso_penalty",
     ),
+    "prox_lasso_": ("xneural_var.regularizers", "prox_lasso_"),
     "prox_group_lasso_": ("xneural_var.regularizers", "prox_group_lasso_"),
     "prox_hierarchical_group_lasso_": (
         "xneural_var.regularizers",
         "prox_hierarchical_group_lasso_",
     ),
+    "prox_sparse_group_lasso_": ("xneural_var.regularizers", "prox_sparse_group_lasso_"),
+    "sparse_group_lasso_penalty": ("xneural_var.regularizers", "sparse_group_lasso_penalty"),
 }
 
 

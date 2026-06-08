@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Literal
 
 import numpy as np
@@ -26,7 +27,9 @@ class GVARTrainingConfig:
     lambda_ngc: float = 0.0
     lambda_smooth: float = 0.0
     coefficient_weight_decay: float = 0.0
-    regularizer: RegularizerName = "group_lasso"
+    regularizer: RegularizerName = "sparse_group_lasso"
+    sparse_l1_weight: float = 1.0
+    sparse_group_weight: float = 1.0
     optimizer: OptimizerName = "ista"
     gate_init: float = 1.0
     seed: int | None = 42
@@ -35,6 +38,8 @@ class GVARTrainingConfig:
     strength_aggregation: AggregationName = "max"
     smoothness_mode: SmoothnessMode = "absolute"
     smoothness_eps: float = 1e-8
+    verbose: int = 1
+    log_every: int = 10
     device: str | torch.device | None = None
 
 
@@ -179,6 +184,40 @@ def _epoch(
 
 
 @torch.no_grad()
+def _gate_usage(model: GVARWithNGCGates, threshold: float) -> tuple[float, int, int]:
+    if model.causal_gate is None:
+        return 0.0, 0, 0
+    graph = model.causal_graph_from_gate(threshold=threshold)
+    active = int(graph.sum().detach().cpu())
+    total = graph.numel()
+    return 100.0 * active / max(total, 1), active, total
+
+
+def _log_epoch(
+    epoch: int,
+    config: GVARTrainingConfig,
+    metrics: dict[str, float],
+    model: GVARWithNGCGates,
+    log_fn: Callable[[str], None] = print,
+) -> None:
+    if config.verbose <= 0:
+        return
+    log_every = max(config.log_every, 1)
+    if epoch != 1 and epoch != config.max_epochs and epoch % log_every != 0:
+        return
+
+    usage_pct, active_edges, total_edges = _gate_usage(model, config.causal_threshold)
+    log_fn(
+        f"Epoch {epoch:>4}/{config.max_epochs:<4} | "
+        f"loss={metrics['loss']:.6g} | "
+        f"mse={metrics['mse']:.6g} | "
+        f"ngc={metrics['ngc']:.6g} | "
+        f"smooth={metrics['smooth']:.6g} | "
+        f"active_edges={active_edges}/{total_edges} ({usage_pct:.2f}%)"
+    )
+
+
+@torch.no_grad()
 def _infer(
     model: GVARWithNGCGates,
     dataset: LaggedDataset,
@@ -230,13 +269,20 @@ def fit_gvar_ngc(
         )
     model.to(device)
 
-    ngc = NGCRegularizer(name=config.regularizer, lam=config.lambda_ngc, reduction="sum", lag_dim=0)
+    ngc = NGCRegularizer(
+        name=config.regularizer,
+        lam=config.lambda_ngc,
+        reduction="sum",
+        lag_dim=0,
+        sparse_l1_weight=config.sparse_l1_weight,
+        sparse_group_weight=config.sparse_group_weight,
+    )
     optimizer = _make_optimizer(config, model)
     criterion = nn.MSELoss(reduction="mean")
     rng = np.random.default_rng(config.seed)
     history: dict[str, list[float]] = {"loss": [], "mse": [], "ngc": [], "smooth": []}
 
-    for _ in range(config.max_epochs):
+    for epoch in range(1, config.max_epochs + 1):
         metrics = _epoch(
             model=model,
             dataset=dataset,
@@ -249,6 +295,7 @@ def fit_gvar_ngc(
         )
         for key, value in metrics.items():
             history[key].append(value)
+        _log_epoch(epoch, config, metrics, model)
 
     coeffs, strength, graph = _infer(model, dataset, config, device)
     return FitResult(

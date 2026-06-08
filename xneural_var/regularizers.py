@@ -5,7 +5,7 @@ from typing import Literal
 
 import torch
 
-RegularizerName = Literal["none", "group_lasso", "hierarchical_group_lasso"]
+RegularizerName = Literal["none", "sparse_group_lasso", "group_lasso", "hierarchical_group_lasso"]
 ReductionName = Literal["sum", "mean"]
 
 
@@ -41,6 +41,33 @@ def group_lasso_penalty(
     return _reduce(norms, reduction)
 
 
+def sparse_group_lasso_penalty(
+    tensor: torch.Tensor,
+    *,
+    lag_dim: int = 0,
+    reduction: ReductionName = "sum",
+    l1_weight: float = 1.0,
+    group_weight: float = 1.0,
+) -> torch.Tensor:
+    """Sparse group lasso over lag blocks for every target-source pair.
+
+    Neural-GC's cMLP implements ``GSGL`` as lag-level shrinkage followed by
+    source-level group shrinkage. For the gate tensor used here, each lag-level
+    gate is a scalar, so the lag-level term becomes an L1 penalty while the
+    edge-level term is the usual group lasso across lags.
+    """
+    penalty = tensor.new_zeros(())
+    if group_weight:
+        penalty = penalty + group_weight * group_lasso_penalty(
+            tensor,
+            lag_dim=lag_dim,
+            reduction=reduction,
+        )
+    if l1_weight:
+        penalty = penalty + l1_weight * _reduce(tensor.abs(), reduction)
+    return penalty
+
+
 def hierarchical_group_lasso_penalty(
     tensor: torch.Tensor,
     *,
@@ -61,6 +88,14 @@ def hierarchical_group_lasso_penalty(
 
 
 @torch.no_grad()
+def prox_lasso_(param: torch.Tensor, lam: float, step_size: float) -> torch.Tensor:
+    """In-place elementwise soft-thresholding."""
+    threshold = lam * step_size
+    param.copy_(param.sign() * torch.clamp(param.abs() - threshold, min=0.0))
+    return param
+
+
+@torch.no_grad()
 def prox_group_lasso_(param: torch.Tensor, lam: float, step_size: float, eps: float = 1e-12) -> torch.Tensor:
     """In-place proximal operator for group lasso on ``[lag, target, source]``."""
     if param.ndim != 3:
@@ -70,6 +105,30 @@ def prox_group_lasso_(param: torch.Tensor, lam: float, step_size: float, eps: fl
     scale = torch.clamp(1.0 - threshold / torch.clamp(norms, min=eps), min=0.0)
     param.mul_(scale)
     param.masked_fill_(norms <= threshold, 0.0)
+    return param
+
+
+@torch.no_grad()
+def prox_sparse_group_lasso_(
+    param: torch.Tensor,
+    lam: float,
+    step_size: float,
+    *,
+    l1_weight: float = 1.0,
+    group_weight: float = 1.0,
+    eps: float = 1e-12,
+) -> torch.Tensor:
+    """In-place proximal operator for sparse group lasso.
+
+    The update mirrors Neural-GC's ``GSGL`` order: first apply within-group
+    sparsity, then shrink each target-source lag vector as one group.
+    """
+    if param.ndim != 3:
+        raise ValueError("prox_sparse_group_lasso_ expects [lag, target, source]")
+    if l1_weight:
+        prox_lasso_(param, lam * l1_weight, step_size)
+    if group_weight:
+        prox_group_lasso_(param, lam * group_weight, step_size, eps=eps)
     return param
 
 
@@ -100,14 +159,24 @@ def prox_hierarchical_group_lasso_(
 
 @dataclass(frozen=True)
 class NGCRegularizer:
-    name: RegularizerName = "group_lasso"
+    name: RegularizerName = "sparse_group_lasso"
     lam: float = 0.0
     reduction: ReductionName = "sum"
     lag_dim: int = 0
+    sparse_l1_weight: float = 1.0
+    sparse_group_weight: float = 1.0
 
     def penalty(self, tensor: torch.Tensor) -> torch.Tensor:
         if self.name == "none" or self.lam == 0:
             return tensor.new_zeros(())
+        if self.name == "sparse_group_lasso":
+            return self.lam * sparse_group_lasso_penalty(
+                tensor,
+                lag_dim=self.lag_dim,
+                reduction=self.reduction,
+                l1_weight=self.sparse_l1_weight,
+                group_weight=self.sparse_group_weight,
+            )
         if self.name == "group_lasso":
             return self.lam * group_lasso_penalty(
                 tensor,
@@ -128,6 +197,14 @@ class NGCRegularizer:
             return param
         if self.lag_dim != 0:
             raise ValueError("prox_ expects lag_dim=0 and param shape [lag, target, source]")
+        if self.name == "sparse_group_lasso":
+            return prox_sparse_group_lasso_(
+                param,
+                self.lam,
+                step_size,
+                l1_weight=self.sparse_l1_weight,
+                group_weight=self.sparse_group_weight,
+            )
         if self.name == "group_lasso":
             return prox_group_lasso_(param, self.lam, step_size)
         if self.name == "hierarchical_group_lasso":

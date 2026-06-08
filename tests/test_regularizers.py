@@ -6,6 +6,8 @@ from xneural_var.regularizers import (
     group_lasso_penalty,
     hierarchical_group_lasso_penalty,
     prox_group_lasso_,
+    prox_sparse_group_lasso_,
+    sparse_group_lasso_penalty,
 )
 
 
@@ -32,6 +34,36 @@ def test_group_lasso_prox_shrinks_group_norm():
     prox_group_lasso_(gate, lam=1.0, step_size=1.0)
 
     assert gate[:, 0, 0].tolist() == pytest.approx([2.4, 3.2])
+
+
+def test_sparse_group_lasso_penalty_adds_group_and_l1_terms():
+    gate = torch.zeros(2, 1, 1)
+    gate[:, 0, 0] = torch.tensor([3.0, 4.0])
+
+    penalty = sparse_group_lasso_penalty(gate)
+
+    assert penalty.item() == pytest.approx(12.0)
+
+
+def test_sparse_group_lasso_prox_applies_l1_then_group_shrinkage():
+    gate = torch.zeros(2, 1, 1)
+    gate[:, 0, 0] = torch.tensor([3.0, 4.0])
+
+    prox_sparse_group_lasso_(gate, lam=1.0, step_size=1.0)
+
+    expected_norm = (2.0**2 + 3.0**2) ** 0.5
+    expected_scale = 1.0 - 1.0 / expected_norm
+    assert gate[:, 0, 0].tolist() == pytest.approx([2.0 * expected_scale, 3.0 * expected_scale])
+
+
+def test_sparse_group_lasso_prox_can_zero_individual_lags():
+    gate = torch.zeros(2, 1, 1)
+    gate[:, 0, 0] = torch.tensor([0.5, 4.0])
+
+    prox_sparse_group_lasso_(gate, lam=1.0, step_size=1.0)
+
+    assert gate[0, 0, 0].item() == 0.0
+    assert gate[1, 0, 0].item() > 0.0
 
 
 def test_hierarchical_penalty_matches_nested_prefixes():
