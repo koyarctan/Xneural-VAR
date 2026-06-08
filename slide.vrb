@@ -1,0 +1,25 @@
+\frametitle{最小使用例}
+\begin{lstlisting}[language=Python,basicstyle=\ttfamily\small]
+import numpy as np
+
+from xneural_var import GVARTrainingConfig, fit_gvar_ngc
+
+data = np.random.randn(300, 5).astype("float32")
+
+config = GVARTrainingConfig(
+    order=4,
+    hidden_layer_size=32,
+    num_hidden_layers=2,
+    max_epochs=200,
+    batch_size=64,
+    learning_rate=1e-3,
+    lambda_ngc=1e-2,
+    regularizer="sparse_group_lasso",
+    optimizer="ista",
+)
+
+result = fit_gvar_ngc(data, config)
+
+print(result.causal_strength)
+print(result.causal_graph)
+\end{lstlisting}
