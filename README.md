@@ -36,9 +36,10 @@ config = GVARTrainingConfig(
     max_epochs=200,
     batch_size=64,
     learning_rate=1e-3,
-    lambda_ngc=1e-2,
     coefficient_weight_decay=1e-4,
     regularizer="sparse_group_lasso",
+    sparse_group_lambda=1e-2,
+    sparse_l1_lambda=1e-3,
     optimizer="ista",
     log_every=10,
     verbose=1,
@@ -85,18 +86,16 @@ The default NGC regularizer is:
 ```math
 R_{\mathrm{SGL}}(G)
 =
-\lambda_{\mathrm{ngc}}
-\left(
-  w_{\mathrm{group}}
-  \sum_{i,j} \|g_{i,j}\|_2
-  +
-  w_{\mathrm{l1}}
-  \sum_{k,i,j} |G_{k,i,j}|
-\right)
+\lambda_{\mathrm{group}}
+\sum_{i,j} \|g_{i,j}\|_2
++
+\lambda_{\mathrm{l1}}
+\sum_{k,i,j} |G_{k,i,j}|
 ```
 
-`sparse_group_weight` and `sparse_l1_weight` control the two weights. Both
-default to `1.0`, matching the Neural-GC `GSGL` update style.
+`sparse_group_lambda` and `sparse_l1_lambda` control the two penalty strengths
+directly. `lambda_ngc` is not used by `sparse_group_lasso`; it is reserved for
+`group_lasso` and `hierarchical_group_lasso`.
 
 With `optimizer="ista"`, the smooth prediction objective is optimized first,
 then the sparse-group proximal operator is applied to `causal_gate`:
@@ -264,9 +263,13 @@ G_{K,i,j}
 \lambda_{\mathrm{smooth}}
 \mathcal{R}_{\mathrm{smooth}}
 +
-\lambda_{\mathrm{ngc}}
 \mathcal{R}_{\mathrm{ngc}}
 ```
+
+ここで、`sparse_group_lasso` の場合は `\mathcal{R}_{\mathrm{ngc}}`
+自体が `sparse_group_lambda` と `sparse_l1_lambda` を含む。一方、
+`hierarchical_group_lasso` や legacy な `group_lasso` では、従来通り
+`lambda_ngc` が正則化全体の強さを制御する。
 
 ただし、optimizer として `ista` を用いる場合、NGC 正則化項は通常の
 勾配ステップには含めない。その代わり、causal gate に対して
@@ -364,14 +367,14 @@ sparse group lasso penalty は次である。
 ```math
 \mathcal{R}_{\mathrm{ngc}}
 =
-w_{\mathrm{group}}
+\lambda_{\mathrm{group}}
 \sum_{i=1}^{p}
 \sum_{j=1}^{p}
 \left\|
 g_{i,j}
 \right\|_2
 +
-w_{\mathrm{l1}}
+\lambda_{\mathrm{l1}}
 \sum_{k=1}^{K}
 \sum_{i=1}^{p}
 \sum_{j=1}^{p}
@@ -379,6 +382,17 @@ w_{\mathrm{l1}}
 G_{k,i,j}
 \right|
 ```
+
+実装上は、これらを次の設定値で直接指定する。
+
+```python
+sparse_group_lambda = 1e-2
+sparse_l1_lambda = 1e-3
+```
+
+`sparse_group_lasso` では `lambda_ngc` は使わない。これは、
+外側の共通 lambda と内側の重みを掛け合わせるような冗長な
+パラメータ化を避けるためである。
 
 第1項は edge 単位の group sparsity を作り、ある pair `(i, j)` の全ラグを
 同時にゼロ化する方向に働く。これは Granger 非因果性に直接対応する。
@@ -480,7 +494,7 @@ Adam では causal gate が厳密にゼロになりにくい。exact sparsity �
 G^{(m+1)}
 =
 \mathrm{prox}_{
-\eta \lambda_{\mathrm{ngc}} \mathcal{R}_{\mathrm{ngc}}
+\eta \mathcal{R}_{\mathrm{ngc}}
 }
 \left(
 G^{(m+1/2)}
@@ -500,7 +514,7 @@ G_{k,i,j}
 \left(
 \left|G_{k,i,j}\right|
 -
-\eta \lambda_{\mathrm{ngc}} w_{\mathrm{l1}}
+\eta \lambda_{\mathrm{l1}}
 \right)_+
 ```
 
@@ -514,7 +528,7 @@ g_{i,j}
 1
 -
 \frac{
-\eta \lambda_{\mathrm{ngc}} w_{\mathrm{group}}
+\eta \lambda_{\mathrm{group}}
 }{
 \left\|
 g_{i,j}

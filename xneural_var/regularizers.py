@@ -46,8 +46,8 @@ def sparse_group_lasso_penalty(
     *,
     lag_dim: int = 0,
     reduction: ReductionName = "sum",
-    l1_weight: float = 1.0,
-    group_weight: float = 1.0,
+    l1_lambda: float = 0.0,
+    group_lambda: float = 0.0,
 ) -> torch.Tensor:
     """Sparse group lasso over lag blocks for every target-source pair.
 
@@ -57,14 +57,14 @@ def sparse_group_lasso_penalty(
     edge-level term is the usual group lasso across lags.
     """
     penalty = tensor.new_zeros(())
-    if group_weight:
-        penalty = penalty + group_weight * group_lasso_penalty(
+    if group_lambda:
+        penalty = penalty + group_lambda * group_lasso_penalty(
             tensor,
             lag_dim=lag_dim,
             reduction=reduction,
         )
-    if l1_weight:
-        penalty = penalty + l1_weight * _reduce(tensor.abs(), reduction)
+    if l1_lambda:
+        penalty = penalty + l1_lambda * _reduce(tensor.abs(), reduction)
     return penalty
 
 
@@ -111,11 +111,10 @@ def prox_group_lasso_(param: torch.Tensor, lam: float, step_size: float, eps: fl
 @torch.no_grad()
 def prox_sparse_group_lasso_(
     param: torch.Tensor,
-    lam: float,
     step_size: float,
     *,
-    l1_weight: float = 1.0,
-    group_weight: float = 1.0,
+    l1_lambda: float = 0.0,
+    group_lambda: float = 0.0,
     eps: float = 1e-12,
 ) -> torch.Tensor:
     """In-place proximal operator for sparse group lasso.
@@ -125,10 +124,10 @@ def prox_sparse_group_lasso_(
     """
     if param.ndim != 3:
         raise ValueError("prox_sparse_group_lasso_ expects [lag, target, source]")
-    if l1_weight:
-        prox_lasso_(param, lam * l1_weight, step_size)
-    if group_weight:
-        prox_group_lasso_(param, lam * group_weight, step_size, eps=eps)
+    if l1_lambda:
+        prox_lasso_(param, l1_lambda, step_size)
+    if group_lambda:
+        prox_group_lasso_(param, group_lambda, step_size, eps=eps)
     return param
 
 
@@ -163,20 +162,36 @@ class NGCRegularizer:
     lam: float = 0.0
     reduction: ReductionName = "sum"
     lag_dim: int = 0
-    sparse_l1_weight: float = 1.0
-    sparse_group_weight: float = 1.0
+    sparse_l1_lambda: float = 0.0
+    sparse_group_lambda: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.name == "sparse_group_lasso" and self.lam != 0:
+            raise ValueError(
+                "sparse_group_lasso does not use lam/lambda_ngc. "
+                "Use sparse_group_lambda and sparse_l1_lambda instead."
+            )
+        if self.name not in ("none", "sparse_group_lasso") and (
+            self.sparse_l1_lambda != 0 or self.sparse_group_lambda != 0
+        ):
+            raise ValueError(
+                "sparse_l1_lambda and sparse_group_lambda are only used by "
+                "sparse_group_lasso. Use lam/lambda_ngc for this regularizer."
+            )
 
     def penalty(self, tensor: torch.Tensor) -> torch.Tensor:
-        if self.name == "none" or self.lam == 0:
+        if self.name == "none":
             return tensor.new_zeros(())
         if self.name == "sparse_group_lasso":
-            return self.lam * sparse_group_lasso_penalty(
+            return sparse_group_lasso_penalty(
                 tensor,
                 lag_dim=self.lag_dim,
                 reduction=self.reduction,
-                l1_weight=self.sparse_l1_weight,
-                group_weight=self.sparse_group_weight,
+                l1_lambda=self.sparse_l1_lambda,
+                group_lambda=self.sparse_group_lambda,
             )
+        if self.lam == 0:
+            return tensor.new_zeros(())
         if self.name == "group_lasso":
             return self.lam * group_lasso_penalty(
                 tensor,
@@ -193,18 +208,19 @@ class NGCRegularizer:
 
     @torch.no_grad()
     def prox_(self, param: torch.Tensor, step_size: float) -> torch.Tensor:
-        if self.name == "none" or self.lam == 0:
+        if self.name == "none":
             return param
         if self.lag_dim != 0:
             raise ValueError("prox_ expects lag_dim=0 and param shape [lag, target, source]")
         if self.name == "sparse_group_lasso":
             return prox_sparse_group_lasso_(
                 param,
-                self.lam,
                 step_size,
-                l1_weight=self.sparse_l1_weight,
-                group_weight=self.sparse_group_weight,
+                l1_lambda=self.sparse_l1_lambda,
+                group_lambda=self.sparse_group_lambda,
             )
+        if self.lam == 0:
+            return param
         if self.name == "group_lasso":
             return prox_group_lasso_(param, self.lam, step_size)
         if self.name == "hierarchical_group_lasso":

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Literal
 
 import numpy as np
@@ -28,8 +28,8 @@ class GVARTrainingConfig:
     lambda_smooth: float = 0.0
     coefficient_weight_decay: float = 0.0
     regularizer: RegularizerName = "sparse_group_lasso"
-    sparse_l1_weight: float = 1.0
-    sparse_group_weight: float = 1.0
+    sparse_group_lambda: float = 0.0
+    sparse_l1_lambda: float = 0.0
     optimizer: OptimizerName = "ista"
     gate_init: float = 1.0
     seed: int | None = 42
@@ -56,6 +56,28 @@ def _resolve_device(device: str | torch.device | None) -> torch.device:
     if device is not None:
         return torch.device(device)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _validate_config(config: GVARTrainingConfig) -> None:
+    if config.lambda_ngc < 0:
+        raise ValueError("lambda_ngc must be non-negative")
+    if config.sparse_group_lambda < 0:
+        raise ValueError("sparse_group_lambda must be non-negative")
+    if config.sparse_l1_lambda < 0:
+        raise ValueError("sparse_l1_lambda must be non-negative")
+
+    if config.regularizer == "sparse_group_lasso":
+        if config.lambda_ngc != 0:
+            raise ValueError(
+                "sparse_group_lasso does not use lambda_ngc. "
+                "Use sparse_group_lambda and sparse_l1_lambda instead."
+            )
+    elif config.sparse_group_lambda != 0 or config.sparse_l1_lambda != 0:
+        raise ValueError(
+            "sparse_group_lambda and sparse_l1_lambda are only used with "
+            "regularizer='sparse_group_lasso'. Use lambda_ngc for group_lasso "
+            "or hierarchical_group_lasso."
+        )
 
 
 def _make_optimizer(config: GVARTrainingConfig, model: nn.Module) -> torch.optim.Optimizer:
@@ -250,6 +272,8 @@ def fit_gvar_ngc(
     model: GVARWithNGCGates | None = None,
 ) -> FitResult:
     """Fit GVAR with NGC-style structured sparsity."""
+    _validate_config(config)
+
     if config.seed is not None:
         np.random.seed(config.seed)
         torch.manual_seed(config.seed)
@@ -274,8 +298,8 @@ def fit_gvar_ngc(
         lam=config.lambda_ngc,
         reduction="sum",
         lag_dim=0,
-        sparse_l1_weight=config.sparse_l1_weight,
-        sparse_group_weight=config.sparse_group_weight,
+        sparse_l1_lambda=config.sparse_l1_lambda,
+        sparse_group_lambda=config.sparse_group_lambda,
     )
     optimizer = _make_optimizer(config, model)
     criterion = nn.MSELoss(reduction="mean")
