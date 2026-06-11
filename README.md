@@ -146,7 +146,7 @@ Training logs are controlled by `verbose` and `log_every`.
 
 ---
 
-## アルゴリズム: GVAR with NGC-style Sparse Group Lasso
+## アルゴリズム: self-eXplaining neural VAR
 
 本実装は、Generalized Vector Autoregression (GVAR) に Neural Granger
 Causality (NGC) 型の構造的スパース性を導入したモデルである。
@@ -389,10 +389,6 @@ G_{k,i,j}
 sparse_group_lambda = 1e-2
 sparse_l1_lambda = 1e-3
 ```
-
-`sparse_group_lasso` では `lambda_ngc` は使わない。これは、
-外側の共通 lambda と内側の重みを掛け合わせるような冗長な
-パラメータ化を避けるためである。
 
 第1項は edge 単位の group sparsity を作り、ある pair `(i, j)` の全ラグを
 同時にゼロ化する方向に働く。これは Granger 非因果性に直接対応する。
