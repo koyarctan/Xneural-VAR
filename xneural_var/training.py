@@ -52,6 +52,14 @@ class FitResult:
     causal_graph: np.ndarray | None = None
 
 
+@dataclass(frozen=True)
+class _TorchLaggedDataset:
+    predictors: torch.Tensor
+    responses: torch.Tensor
+    time_index: torch.Tensor
+    series_index: torch.Tensor
+
+
 def _resolve_device(device: str | torch.device | None) -> torch.device:
     if device is not None:
         return torch.device(device)
@@ -102,12 +110,33 @@ def _make_optimizer(config: GVARTrainingConfig, model: nn.Module) -> torch.optim
     raise ValueError(f"unsupported optimizer: {config.optimizer}")
 
 
-def _iter_batches(n_samples: int, batch_size: int, shuffle: bool, rng: np.random.Generator):
+def _to_torch_dataset(dataset: LaggedDataset, device: torch.device) -> _TorchLaggedDataset:
+    return _TorchLaggedDataset(
+        predictors=torch.as_tensor(dataset.predictors, dtype=torch.float32, device=device),
+        responses=torch.as_tensor(dataset.responses, dtype=torch.float32, device=device),
+        time_index=torch.as_tensor(dataset.time_index, dtype=torch.long, device=device),
+        series_index=torch.as_tensor(dataset.series_index, dtype=torch.long, device=device),
+    )
+
+
+def _iter_batches(
+    n_samples: int,
+    batch_size: int,
+    shuffle: bool,
+    rng: np.random.Generator,
+    device: torch.device,
+):
+    if not shuffle:
+        for start in range(0, n_samples, batch_size):
+            yield slice(start, start + batch_size)
+        return
+
     indices = np.arange(n_samples)
     if shuffle:
         rng.shuffle(indices)
+    indices_t = torch.as_tensor(indices, dtype=torch.long, device=device)
     for start in range(0, n_samples, batch_size):
-        yield indices[start : start + batch_size]
+        yield indices_t[start : start + batch_size]
 
 
 def temporal_smoothness_penalty(
@@ -137,7 +166,7 @@ def temporal_smoothness_penalty(
 
 def _epoch(
     model: GVARWithNGCGates,
-    dataset: LaggedDataset,
+    dataset: _TorchLaggedDataset,
     config: GVARTrainingConfig,
     optimizer: torch.optim.Optimizer | None,
     ngc: NGCRegularizer,
@@ -148,31 +177,36 @@ def _epoch(
     train = optimizer is not None
     model.train(train)
     totals = {
-        "loss": 0.0,
-        "mse": 0.0,
-        "ngc": 0.0,
-        "smooth": 0.0,
+        "loss": torch.zeros((), device=device),
+        "mse": torch.zeros((), device=device),
+        "ngc": torch.zeros((), device=device),
+        "smooth": torch.zeros((), device=device),
     }
     n_batches = 0
+    use_smoothness = config.lambda_smooth != 0
 
     for batch_idx in _iter_batches(
         dataset.predictors.shape[0],
         config.batch_size,
         shuffle=config.shuffle and train,
         rng=rng,
+        device=device,
     ):
-        inputs = torch.as_tensor(dataset.predictors[batch_idx], dtype=torch.float32, device=device)
-        targets = torch.as_tensor(dataset.responses[batch_idx], dtype=torch.float32, device=device)
-        time_index = torch.as_tensor(dataset.time_index[batch_idx], dtype=torch.long, device=device)
+        inputs = dataset.predictors[batch_idx]
+        targets = dataset.responses[batch_idx]
 
         preds, coeffs = model(inputs)
         mse = criterion(preds, targets)
-        smooth = config.lambda_smooth * temporal_smoothness_penalty(
-            coeffs,
-            time_index,
-            mode=config.smoothness_mode,
-            eps=config.smoothness_eps,
-        )
+        if use_smoothness:
+            time_index = dataset.time_index[batch_idx]
+            smooth = config.lambda_smooth * temporal_smoothness_penalty(
+                coeffs,
+                time_index,
+                mode=config.smoothness_mode,
+                eps=config.smoothness_eps,
+            )
+        else:
+            smooth = mse.new_zeros(())
 
         if model.causal_gate is None:
             raise RuntimeError("NGC regularization requires use_causal_gate=True")
@@ -196,13 +230,16 @@ def _epoch(
                 ngc_penalty = ngc.penalty(model.causal_gate)
                 logged_loss = mse.detach() + smooth.detach() + ngc_penalty.detach()
 
-        totals["loss"] += float(logged_loss.detach().cpu())
-        totals["mse"] += float(mse.detach().cpu())
-        totals["ngc"] += float(ngc_penalty.detach().cpu())
-        totals["smooth"] += float(smooth.detach().cpu())
+        totals["loss"] = totals["loss"] + logged_loss.detach()
+        totals["mse"] = totals["mse"] + mse.detach()
+        totals["ngc"] = totals["ngc"] + ngc_penalty.detach()
+        totals["smooth"] = totals["smooth"] + smooth.detach()
         n_batches += 1
 
-    return {key: value / max(n_batches, 1) for key, value in totals.items()}
+    return {
+        key: float((value / max(n_batches, 1)).detach().cpu())
+        for key, value in totals.items()
+    }
 
 
 @torch.no_grad()
@@ -242,7 +279,7 @@ def _log_epoch(
 @torch.no_grad()
 def _infer(
     model: GVARWithNGCGates,
-    dataset: LaggedDataset,
+    dataset: _TorchLaggedDataset,
     config: GVARTrainingConfig,
     device: torch.device,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -250,7 +287,7 @@ def _infer(
     coeffs_all = []
     for start in range(0, dataset.predictors.shape[0], config.batch_size):
         stop = start + config.batch_size
-        inputs = torch.as_tensor(dataset.predictors[start:stop], dtype=torch.float32, device=device)
+        inputs = dataset.predictors[start:stop]
         _, coeffs = model(inputs)
         coeffs_all.append(coeffs.cpu())
 
@@ -278,10 +315,10 @@ def fit_gvar_ngc(
         np.random.seed(config.seed)
         torch.manual_seed(config.seed)
 
-    dataset = construct_lagged_dataset(data, order=config.order)
+    dataset_np = construct_lagged_dataset(data, order=config.order)
     device = _resolve_device(config.device)
 
-    num_vars = dataset.predictors.shape[-1]
+    num_vars = dataset_np.predictors.shape[-1]
     if model is None:
         model = GVARWithNGCGates(
             num_vars=num_vars,
@@ -305,6 +342,7 @@ def fit_gvar_ngc(
     criterion = nn.MSELoss(reduction="mean")
     rng = np.random.default_rng(config.seed)
     history: dict[str, list[float]] = {"loss": [], "mse": [], "ngc": [], "smooth": []}
+    dataset = _to_torch_dataset(dataset_np, device)
 
     for epoch in range(1, config.max_epochs + 1):
         metrics = _epoch(

@@ -8,15 +8,51 @@ from torch import nn
 AggregationName = Literal["max", "mean", "median"]
 
 
-def _make_mlp(input_dim: int, hidden_dim: int, output_dim: int, num_hidden_layers: int) -> nn.Sequential:
-    if num_hidden_layers <= 0:
-        raise ValueError("num_hidden_layers must be positive")
+class LagwiseMLP(nn.Module):
+    """Independent MLP per lag, evaluated as batched tensor operations."""
 
-    layers: list[nn.Module] = [nn.Linear(input_dim, hidden_dim), nn.ReLU()]
-    for _ in range(num_hidden_layers - 1):
-        layers.extend([nn.Linear(hidden_dim, hidden_dim), nn.ReLU()])
-    layers.append(nn.Linear(hidden_dim, output_dim))
-    return nn.Sequential(*layers)
+    def __init__(
+        self,
+        num_lags: int,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        num_hidden_layers: int,
+    ) -> None:
+        super().__init__()
+        if num_hidden_layers <= 0:
+            raise ValueError("num_hidden_layers must be positive")
+
+        dims = [input_dim] + [hidden_dim] * num_hidden_layers + [output_dim]
+        self.num_lags = num_lags
+        self.weights = nn.ParameterList(
+            [
+                nn.Parameter(torch.empty(num_lags, dims[layer_idx + 1], dims[layer_idx]))
+                for layer_idx in range(len(dims) - 1)
+            ]
+        )
+        self.biases = nn.ParameterList(
+            [
+                nn.Parameter(torch.empty(num_lags, dims[layer_idx + 1]))
+                for layer_idx in range(len(dims) - 1)
+            ]
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        for weight, bias in zip(self.weights, self.biases):
+            for lag_idx in range(self.num_lags):
+                nn.init.xavier_normal_(weight[lag_idx])
+            nn.init.constant_(bias, 0.1)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        activations = inputs
+        final_layer = len(self.weights) - 1
+        for layer_idx, (weight, bias) in enumerate(zip(self.weights, self.biases)):
+            activations = torch.einsum("bki,koi->bko", activations, weight) + bias.unsqueeze(0)
+            if layer_idx != final_layer:
+                activations = torch.relu(activations)
+        return activations
 
 
 class GVARWithNGCGates(nn.Module):
@@ -49,16 +85,12 @@ class GVARWithNGCGates(nn.Module):
         self.num_hidden_layers = num_hidden_layers
         self.use_causal_gate = use_causal_gate
 
-        self.coeff_nets = nn.ModuleList(
-            [
-                _make_mlp(
-                    input_dim=num_vars,
-                    hidden_dim=hidden_layer_size,
-                    output_dim=num_vars * num_vars,
-                    num_hidden_layers=num_hidden_layers,
-                )
-                for _ in range(order)
-            ]
+        self.coeff_net = LagwiseMLP(
+            num_lags=order,
+            input_dim=num_vars,
+            hidden_dim=hidden_layer_size,
+            output_dim=num_vars * num_vars,
+            num_hidden_layers=num_hidden_layers,
         )
 
         if use_causal_gate:
@@ -67,13 +99,8 @@ class GVARWithNGCGates(nn.Module):
         else:
             self.register_parameter("causal_gate", None)
 
-        self.reset_parameters()
-
     def reset_parameters(self) -> None:
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_normal_(module.weight)
-                nn.init.constant_(module.bias, 0.1)
+        self.coeff_net.reset_parameters()
 
     def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         if inputs.ndim != 3:
@@ -84,18 +111,10 @@ class GVARWithNGCGates(nn.Module):
                 f"got {tuple(inputs.shape)}"
             )
 
-        coeffs_by_lag = []
-        preds = inputs.new_zeros((inputs.shape[0], self.num_vars))
-
-        for lag_idx, coeff_net in enumerate(self.coeff_nets):
-            coeffs_k = coeff_net(inputs[:, lag_idx, :])
-            coeffs_k = coeffs_k.reshape(inputs.shape[0], self.num_vars, self.num_vars)
-            if self.causal_gate is not None:
-                coeffs_k = coeffs_k * self.causal_gate[lag_idx].unsqueeze(0)
-            preds = preds + torch.matmul(coeffs_k, inputs[:, lag_idx, :].unsqueeze(-1)).squeeze(-1)
-            coeffs_by_lag.append(coeffs_k)
-
-        coeffs = torch.stack(coeffs_by_lag, dim=1)
+        coeffs = self.coeff_net(inputs).reshape(inputs.shape[0], self.order, self.num_vars, self.num_vars)
+        if self.causal_gate is not None:
+            coeffs = coeffs * self.causal_gate.unsqueeze(0)
+        preds = torch.einsum("bkij,bkj->bi", coeffs, inputs)
         return preds, coeffs
 
     @torch.no_grad()
