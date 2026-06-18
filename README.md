@@ -178,14 +178,11 @@ state-dependent coefficient model directly. Because this baseline has no
 proximal gate, its reported graph is thresholded from coefficient strength
 rather than exact structural zeros.
 
-### 比較用実装について
+### About the Comparison Implementations
 
-`fit_cmlp` は Neural-GC 公式実装に合わせ、目的変数ごとに独立した
-component-wise MLP を学習する。Granger 構造は第1層の入力重みから読む。
+`fit_cmlp` follows the official Neural-GC implementation and trains an independent component-wise MLP for each target variable. The Granger structure is read from the input weights of the first layer.
 
-`fit_gvar` は causal gate を使わない純粋な GVAR/SENN 型モデルである。
-こちらは近接勾配による厳密ゼロを持たないため、`causal_graph` は係数強度を
-`causal_threshold` で閾値処理した比較用のグラフとして解釈する。
+`fit_gvar` is a pure GVAR/SENN-style model that does not use causal gates. Since this model does not produce exact zeros through proximal gradient updates, `causal_graph` should be interpreted as a comparison graph obtained by thresholding coefficient magnitudes with `causal_threshold`.
 
 ## Package Layout
 
