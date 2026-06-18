@@ -3,13 +3,20 @@ from importlib import import_module
 from .data import LaggedDataset, construct_lagged_dataset
 
 __all__ = [
+    "CMLP",
+    "CMLPFitResult",
+    "CMLPTrainingConfig",
     "FitResult",
+    "GVARBaselineFitResult",
+    "GVARBaselineTrainingConfig",
     "GVARTrainingConfig",
     "GVARWithNGCGates",
     "LaggedDataset",
     "NGCRegularizer",
     "RegularizerName",
     "construct_lagged_dataset",
+    "fit_cmlp",
+    "fit_gvar",
     "fit_gvar_ngc",
     "group_lasso_penalty",
     "hierarchical_group_lasso_penalty",
@@ -21,11 +28,18 @@ __all__ = [
 ]
 
 _LAZY_ATTRS = {
+    "CMLP": ("xneural_var.cmlp", "CMLP"),
+    "CMLPFitResult": ("xneural_var.cmlp", "CMLPFitResult"),
+    "CMLPTrainingConfig": ("xneural_var.cmlp", "CMLPTrainingConfig"),
     "FitResult": ("xneural_var.training", "FitResult"),
+    "GVARBaselineFitResult": ("xneural_var.gvar", "GVARBaselineFitResult"),
+    "GVARBaselineTrainingConfig": ("xneural_var.gvar", "GVARBaselineTrainingConfig"),
     "GVARTrainingConfig": ("xneural_var.training", "GVARTrainingConfig"),
     "GVARWithNGCGates": ("xneural_var.models", "GVARWithNGCGates"),
     "NGCRegularizer": ("xneural_var.regularizers", "NGCRegularizer"),
     "RegularizerName": ("xneural_var.regularizers", "RegularizerName"),
+    "fit_cmlp": ("xneural_var.cmlp", "fit_cmlp"),
+    "fit_gvar": ("xneural_var.gvar", "fit_gvar"),
     "fit_gvar_ngc": ("xneural_var.training", "fit_gvar_ngc"),
     "group_lasso_penalty": ("xneural_var.regularizers", "group_lasso_penalty"),
     "hierarchical_group_lasso_penalty": (

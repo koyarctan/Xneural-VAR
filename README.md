@@ -136,9 +136,62 @@ Training logs are controlled by `verbose` and `log_every`.
   active edge count.
 - `log_every=10`: print every 10 epochs, plus the first and final epoch.
 
+## Baselines
+
+For validation experiments, the package also exposes reference-style cMLP and
+GVAR baselines with the same high-level fit-result interface:
+
+```python
+from xneural_var import CMLPTrainingConfig, GVARBaselineTrainingConfig
+from xneural_var import fit_cmlp, fit_gvar
+
+cmlp_result = fit_cmlp(
+    data,
+    CMLPTrainingConfig(
+        order=4,
+        hidden_layer_size=32,
+        regularizer="sparse_group_lasso",
+        sparse_group_lambda=1e-2,
+        sparse_l1_lambda=1e-3,
+        optimizer="ista",
+    ),
+)
+
+gvar_result = fit_gvar(
+    data,
+    GVARBaselineTrainingConfig(
+        order=4,
+        hidden_layer_size=32,
+        lambda_coeff=1e-3,
+        lambda_smooth=1e-3,
+    ),
+)
+```
+
+`fit_cmlp` follows the Neural-GC component-wise MLP design: one MLP is trained
+per target variable, and Granger structure is read from the first-layer input
+weights. Its sparse group lasso uses direct `sparse_group_lambda` and
+`sparse_l1_lambda` parameters, matching the XNeural VAR convention.
+
+`fit_gvar` disables the NGC causal gate and trains the GVAR/SENN-style
+state-dependent coefficient model directly. Because this baseline has no
+proximal gate, its reported graph is thresholded from coefficient strength
+rather than exact structural zeros.
+
+### 比較用実装について
+
+`fit_cmlp` は Neural-GC 公式実装に合わせ、目的変数ごとに独立した
+component-wise MLP を学習する。Granger 構造は第1層の入力重みから読む。
+
+`fit_gvar` は causal gate を使わない純粋な GVAR/SENN 型モデルである。
+こちらは近接勾配による厳密ゼロを持たないため、`causal_graph` は係数強度を
+`causal_threshold` で閾値処理した比較用のグラフとして解釈する。
+
 ## Package Layout
 
 - `xneural_var.models`: GVAR/SENN model with causal gates.
+- `xneural_var.gvar`: GVAR baseline without NGC causal gates.
+- `xneural_var.cmlp`: Neural-GC cMLP baseline.
 - `xneural_var.regularizers`: sparse group lasso, hierarchical group lasso, and
   proximal operators.
 - `xneural_var.training`: training loop, logging, and result objects.
