@@ -20,6 +20,8 @@ __all__ = [
     "fit_gvar_ngc",
     "group_lasso_penalty",
     "hierarchical_group_lasso_penalty",
+    "plot_causal_gate_by_lag",
+    "plot_edge_lag_boxplots",
     "prox_lasso_",
     "prox_group_lasso_",
     "prox_hierarchical_group_lasso_",
@@ -46,6 +48,8 @@ _LAZY_ATTRS = {
         "xneural_var.regularizers",
         "hierarchical_group_lasso_penalty",
     ),
+    "plot_causal_gate_by_lag": ("xneural_var.visualization", "plot_causal_gate_by_lag"),
+    "plot_edge_lag_boxplots": ("xneural_var.visualization", "plot_edge_lag_boxplots"),
     "prox_lasso_": ("xneural_var.regularizers", "prox_lasso_"),
     "prox_group_lasso_": ("xneural_var.regularizers", "prox_group_lasso_"),
     "prox_hierarchical_group_lasso_": (

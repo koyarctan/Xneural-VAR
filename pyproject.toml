@@ -9,6 +9,11 @@ dependencies = [
   "torch>=2.0",
 ]
 
+[project.optional-dependencies]
+viz = [
+  "matplotlib>=3.7",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

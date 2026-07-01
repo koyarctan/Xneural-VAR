@@ -20,6 +20,12 @@ gradient updates can create exact zeros in the learned Granger structure.
 pip install -e .
 ```
 
+Visualization utilities use Matplotlib and can be installed with:
+
+```bash
+pip install -e .[viz]
+```
+
 ## Minimal Usage
 
 ```python
@@ -136,6 +142,68 @@ Training logs are controlled by `verbose` and `log_every`.
   active edge count.
 - `log_every=10`: print every 10 epochs, plus the first and final epoch.
 
+## Visualization
+
+The visualization utilities are intended for the XNeural VAR result returned by
+`fit_gvar_ngc`. They use the learned `causal_gate` and the gated effective
+coefficient tensor `result.coeffs`.
+
+```python
+from xneural_var import plot_causal_gate_by_lag, plot_edge_lag_boxplots
+
+variable_names = [f"x{i}" for i in range(data.shape[1])]
+
+plot_causal_gate_by_lag(
+    result,
+    variable_names=variable_names,
+    absolute=True,
+    summary="norm",
+    percentile=99,
+    save_path="causal_gate_by_lag.png",
+)
+```
+
+`plot_causal_gate_by_lag` draws one heatmap per lag from
+`model.causal_gate.shape == [lag, target, source]`. The final panel summarizes
+the gate over lags with a norm, max, or mean aggregation. This figure is the
+most direct view of the learned structural Granger sparsity.
+
+```python
+plot_edge_lag_boxplots(
+    result,
+    top_n=6,
+    exclude_self=True,
+    value="signed",
+    variable_names=variable_names,
+    save_path="edge_lag_boxplots.png",
+)
+```
+
+`plot_edge_lag_boxplots` selects the strongest edges from
+`result.causal_strength` unless explicit `(target, source)` pairs are supplied:
+
+```python
+plot_edge_lag_boxplots(
+    result,
+    edges=[(1, 0), (2, 1)],  # source 0 -> target 1, source 1 -> target 2
+    value="absolute",
+)
+```
+
+The x-axis is lag and the y-axis is the distribution of
+`result.coeffs[:, lag, target, source]` across samples. Use `value="signed"` to
+inspect effect direction and sign stability; use `value="absolute"` to inspect
+effect magnitude.
+
+### 可視化の使い分け
+
+- `plot_causal_gate_by_lag`: ラグごとの `causal_gate` をヒートマップ化する。
+  構造的な Granger sparsity を確認するための図である。
+- `plot_edge_lag_boxplots`: 重要 edge について、ラグを横軸、有効係数値を縦軸
+  とする箱ひげ図を描く。係数が状態依存的にどの程度変動するかを確認できる。
+- `value="signed"` は効果の向き、`value="absolute"` は効果の大きさを見るために
+  使う。
+
 ## Baselines
 
 For validation experiments, the package also exposes reference-style cMLP and
@@ -192,6 +260,8 @@ rather than exact structural zeros.
 - `xneural_var.regularizers`: sparse group lasso, hierarchical group lasso, and
   proximal operators.
 - `xneural_var.training`: training loop, logging, and result objects.
+- `xneural_var.visualization`: XNeural VAR causal-gate and effective-coefficient
+  plots.
 - `xneural_var.data`: lagged dataset construction.
 
 ---
