@@ -198,15 +198,6 @@ The x-axis is lag and the y-axis is the distribution of
 inspect effect direction and sign stability; use `value="absolute"` to inspect
 effect magnitude.
 
-### 可視化の使い分け
-
-- `plot_causal_gate_by_lag`: ラグごとの `causal_gate` をヒートマップ化する。
-  構造的な Granger sparsity を確認するための図である。
-- `plot_edge_lag_boxplots`: 重要 edge について、ラグを横軸、有効係数値を縦軸
-  とする箱ひげ図を描く。係数が状態依存的にどの程度変動するかを確認できる。
-- `value="signed"` は効果の向き、`value="absolute"` は効果の大きさを見るために
-  使う。
-
 ## Baselines
 
 For validation experiments, the package also exposes reference-style cMLP and
