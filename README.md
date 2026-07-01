@@ -159,6 +159,7 @@ plot_causal_gate_by_lag(
     absolute=True,
     summary="norm",
     percentile=99,
+    tick_label_step=2,
     save_path="causal_gate_by_lag.png",
 )
 ```
@@ -167,6 +168,8 @@ plot_causal_gate_by_lag(
 `model.causal_gate.shape == [lag, target, source]`. The final panel summarizes
 the gate over lags with a norm, max, or mean aggregation. This figure is the
 most direct view of the learned structural Granger sparsity.
+For larger systems, `tick_label_step` can be used to thin axis labels while
+keeping the full cell grid.
 
 ```python
 plot_edge_lag_boxplots(

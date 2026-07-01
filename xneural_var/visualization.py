@@ -102,12 +102,17 @@ def _heatmap_limits(mats: list[np.ndarray], signed: bool, percentile: float) -> 
     return 0.0, vmax
 
 
-def _format_ticks(ax: Any, names: list[str]) -> None:
+def _auto_tick_label_step(n_names: int) -> int:
+    return max(1, ceil(n_names / 12))
+
+
+def _format_ticks(ax: Any, names: list[str], label_step: int) -> None:
     positions = np.arange(len(names))
     ax.set_xticks(positions)
     ax.set_yticks(positions)
-    ax.set_xticklabels(names, rotation=45, ha="right", rotation_mode="anchor")
-    ax.set_yticklabels(names)
+    visible_names = [name if idx % label_step == 0 else "" for idx, name in enumerate(names)]
+    ax.set_xticklabels(visible_names, rotation=45, ha="right", rotation_mode="anchor")
+    ax.set_yticklabels(visible_names)
     ax.set_xlabel("source")
     ax.set_ylabel("target")
 
@@ -147,6 +152,7 @@ def plot_causal_gate_by_lag(
     title: str = "Lag-wise causal gate",
     figsize: tuple[float, float] | None = None,
     ncols: int | None = None,
+    tick_label_step: int | None = None,
     save_path: str | Path | None = None,
     dpi: int = 300,
     show: bool = True,
@@ -189,20 +195,34 @@ def plot_causal_gate_by_lag(
 
     n_panels = len(mats)
     if ncols is None:
-        ncols = min(4, n_panels)
+        max_cols = 3 if n_targets >= 12 else 4
+        ncols = min(max_cols, n_panels)
     nrows = ceil(n_panels / ncols)
     if figsize is None:
-        figsize = (3.2 * ncols + 0.8, 3.1 * nrows + 0.8)
+        figsize = (3.35 * ncols + 1.2, 3.25 * nrows + 0.8)
     if annotate is None:
         annotate = n_targets <= 6
+    if tick_label_step is None:
+        tick_label_step = _auto_tick_label_step(n_targets)
+    tick_label_step = max(1, int(tick_label_step))
 
     with plt.rc_context(_PAPER_RC):
-        fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False)
-        fig.suptitle(title, fontsize=14, fontweight="semibold", y=0.995)
+        fig = plt.figure(figsize=figsize, constrained_layout=True)
+        grid = fig.add_gridspec(
+            nrows=nrows,
+            ncols=ncols + 1,
+            width_ratios=[1.0] * ncols + [0.055],
+            wspace=0.08,
+            hspace=0.18,
+        )
+        axes = np.empty((nrows, ncols), dtype=object)
+        fig.suptitle(title, fontsize=14, fontweight="semibold")
         image = None
 
         for idx, (mat, panel_title) in enumerate(zip(mats, titles)):
-            ax = axes.flat[idx]
+            row, col = divmod(idx, ncols)
+            ax = fig.add_subplot(grid[row, col])
+            axes[row, col] = ax
             image = ax.imshow(
                 mat,
                 cmap=cmap,
@@ -213,7 +233,7 @@ def plot_causal_gate_by_lag(
                 aspect="equal",
             )
             ax.set_title(panel_title, fontsize=10, fontweight="semibold")
-            _format_ticks(ax, names)
+            _format_ticks(ax, names, label_step=tick_label_step)
             ax.set_xticks(np.arange(-0.5, n_sources, 1), minor=True)
             ax.set_yticks(np.arange(-0.5, n_targets, 1), minor=True)
             ax.grid(which="minor", color="white", linewidth=0.8)
@@ -222,13 +242,16 @@ def plot_causal_gate_by_lag(
                 _annotate_heatmap(ax, mat, annotation_format)
 
         for idx in range(n_panels, nrows * ncols):
-            axes.flat[idx].axis("off")
+            row, col = divmod(idx, ncols)
+            ax = fig.add_subplot(grid[row, col])
+            axes[row, col] = ax
+            ax.axis("off")
 
         if image is not None:
-            cbar = fig.colorbar(image, ax=axes.ravel().tolist(), fraction=0.025, pad=0.02)
+            cax = fig.add_subplot(grid[:, -1])
+            cbar = fig.colorbar(image, cax=cax)
             cbar.set_label("|gate|" if absolute else "gate", rotation=270, labelpad=14)
 
-        fig.tight_layout(rect=(0, 0, 0.97, 0.96))
         _finish_figure(fig, save_path, dpi=dpi, show=show)
         return fig, axes
 
@@ -350,8 +373,15 @@ def plot_edge_lag_boxplots(
     ylabel = "effective coefficient" if signed else "|effective coefficient|"
 
     with plt.rc_context(_PAPER_RC):
-        fig, axes = plt.subplots(nrows, ncols, figsize=figsize, squeeze=False, sharey=True)
-        fig.suptitle(title, fontsize=14, fontweight="semibold", y=0.995)
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=figsize,
+            squeeze=False,
+            sharey=True,
+            constrained_layout=True,
+        )
+        fig.suptitle(title, fontsize=14, fontweight="semibold")
 
         for idx, (target, source) in enumerate(selected_edges):
             ax = axes.flat[idx]
@@ -396,6 +426,5 @@ def plot_edge_lag_boxplots(
         for idx in range(n_panels, nrows * ncols):
             axes.flat[idx].axis("off")
 
-        fig.tight_layout(rect=(0, 0, 1, 0.95))
         _finish_figure(fig, save_path, dpi=dpi, show=show)
         return fig, axes
