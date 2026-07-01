@@ -10,4 +10,4 @@ build/
 *.egg-info/
 *.tex
 slide*
-.png
+figures/
