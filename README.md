@@ -262,134 +262,172 @@ rather than exact structural zeros.
 
 ## アルゴリズム: self-eXplaining neural VAR
 
-本実装は、Generalized Vector Autoregression (GVAR) に Neural Granger
-Causality (NGC) 型の構造的スパース性を導入したモデルである。
+この節では、`slides/slide.tex` の発表構成に合わせて、本実装の考え方を説明する。
+本手法は、GVAR の「状態依存的で符号解釈可能な係数行列」と、Neural Granger Causality (NGC) の「構造的スパース性」を、学習可能な `causal_gate` により統合する。
 
-目的は、非線形かつ状態依存的な時系列ダイナミクスを表現しつつ、
-Granger 非因果性に対応する係数ブロックを近接勾配法により厳密に
-ゼロ化することである。今回の標準設定では、NGC 公式実装の `GSGL`
-に対応する sparse group lasso を causal gate に適用する。
+狙いは次の3点である。
 
-### 1. モデル
+1. 非線形・状態依存的な自己回帰ダイナミクスを表現する。
+2. Granger 非因果性に対応する変数間関係を、近接勾配法により厳密にゼロ化する。
+3. 学習後に、因果構造は `causal_gate` から、効果の大きさと符号は有効係数から解釈する。
 
-`p` 変量時系列を次のように表す。
+### 1. 多変量時系列解析とVAR
 
-```math
-x_t \in \mathbb{R}^p
-```
-
-自己回帰次数を `K` とし、時点 `t` におけるラグ付き入力を次のように
-定義する。
+`p` 変量時系列を次で表す。
 
 ```math
-X_t = (x_{t-K}, \dots, x_{t-1})
+x_t = (x_{t,1}, \ldots, x_{t,p})^\top \in \mathbb{R}^{p}
 ```
 
-各ラグ `k = 1, ..., K` に対して、GVAR は状態依存係数行列を
-ニューラルネットワークにより生成する。
+通常のVARは、過去の値の線形結合により現在の値を予測する。
 
 ```math
-\Phi_k(x_{t-k}) \in \mathbb{R}^{p \times p}
+x_t
+=
+\sum_{k=1}^{K}
+\Phi_k x_{t-k}
++
+\varepsilon_t
 ```
 
-一歩先予測は次で定義される。
+ここで、`K` は自己回帰次数、`\Phi_k \in \mathbb{R}^{p \times p}` はラグ `k` の係数行列である。`\Phi_{k,i,j}` は「変数 `j` の `k` 期前の値が、変数 `i` の現在値に与える線形効果」と解釈できる。
+
+VARは係数解釈が容易である一方、非線形性や状態依存性を表現しにくい。本研究は、このVAR的な係数解釈を保ちながら、ニューラルネットワークにより非線形・状態依存的な係数を学習する。
+
+### 2. 提案手法の位置づけ
+
+本手法は、次の2つの既存研究を接続する。
+
+1. **GVAR**: 状態依存的な係数行列をニューラルネットワークで生成し、係数の符号や大きさを解釈できる。
+2. **Neural Granger Causality (NGC)**: ニューラルネットワークの重みに構造的スパース制約を課し、Granger因果性を推定する。
+
+GVARは係数解釈に優れるが、係数を厳密なゼロとして選択する仕組みは弱い。NGCは厳密なスパース構造を作れるが、通常のニューラルネットワーク重みはVAR係数のようには解釈しにくい。
+
+そこで本実装では、GVARが出力する状態依存係数に `causal_gate` を掛ける。
+
+```python
+causal_gate.shape == [lag, target, source]
+```
+
+これにより、状態依存的な効果の表現と、静的なGranger構造の選択を分離する。
+
+### 3. 提案手法の全体像
+
+ラグ付き入力を次のように表す。
+
+```math
+X_t = (x_{t-K}, \ldots, x_{t-1})
+```
+
+GVARの係数出力モデルは、各ラグに対して状態依存係数行列を出力する。
+
+```math
+\Phi_{k}(x_{t-k}) \in \mathbb{R}^{p \times p}
+```
+
+本手法では、各ラグの係数行列に `causal_gate` を掛け、有効係数を定義する。
+
+```math
+\tilde{\Phi}_{k,t}
+=
+G_k \odot \Phi_k(x_{t-k})
+```
+
+ここで、`\odot` はHadamard積であり、`G_k \in \mathbb{R}^{p \times p}` はラグ `k` の構造ゲートである。
+
+最終的な一歩先予測は次である。
 
 ```math
 \hat{x}_t
 =
 \sum_{k=1}^{K}
-\tilde{\Phi}_k(x_{t-k}) x_{t-k}
-```
-
-ここで、構造的な Granger sparsity を表す static causal gate を導入する。
-
-```math
-G_k \in \mathbb{R}^{p \times p}
-```
-
-有効係数行列を次で定義する。
-
-```math
-\tilde{\Phi}_k(x_{t-k})
+\tilde{\Phi}_{k,t}x_{t-k}
 =
-G_k \odot \Phi_k(x_{t-k})
+\sum_{k=1}^{K}
+\left(G_k \odot \Phi_k(x_{t-k})\right)x_{t-k}
 ```
 
-ここで、`\odot` は Hadamard 積である。実装上、係数テンソルは次の形を
-持つ。
+実装上、係数テンソルとゲートは次の形を持つ。
 
 ```python
-[batch, lag, target, source]
+coeffs.shape      == [batch, lag, target, source]
+causal_gate.shape == [lag, target, source]
 ```
 
-causal gate は次の形を持つ。
+`coeffs` は入力値に依存してサンプルごとに変化する。一方、`causal_gate` は入力値に依存しない静的な構造パラメータである。
 
-```python
-[lag, target, source]
-```
+### 4. Causal Gateによる構造制御
 
-### 2. Granger 非因果性
+`\Phi_k(x_{t-k})` は入力値依存であるため、ある時点では係数が小さく、別の時点では大きくなることがある。そのため、状態依存係数だけを閾値処理してGranger因果性を判定すると、構造と状態依存的な効果が混ざってしまう。
 
-変数 `x_j` が変数 `x_i` を Granger cause しないとは、すべてのラグに
-おいて `x_j` から `x_i` への効果がゼロであることを意味する。
-
-本実装では、この条件を causal gate により次のように表現する。
+そこで、構造の有無は `causal_gate` に担当させる。
 
 ```math
-G_{1,i,j}
+\tilde{\Phi}_{k,t,i,j}
 =
-G_{2,i,j}
-=
-\cdots
-=
-G_{K,i,j}
-=
-0
+G_{k,i,j}\Phi_{k,i,j}(x_{t-k})
 ```
 
-したがって、推定される Granger causal graph は次で定義される。
+もし全てのラグで
+
+```math
+G_{1,i,j}=G_{2,i,j}=\cdots=G_{K,i,j}=0
+```
+
+であれば、任意の入力値に対して
+
+```math
+\tilde{\Phi}_{k,t,i,j}=0
+```
+
+となる。つまり、変数 `j` の過去は変数 `i` の予測に使われない。
+
+### 5. 本研究におけるGranger非因果性
+
+本実装では、変数 `x_j` が変数 `x_i` をGranger causeしない十分条件を、全ラグにおける gate のゼロとして表す。
+
+```math
+x_j \not\to x_i
+\quad\Longleftarrow\quad
+G_{1,i,j}=\cdots=G_{K,i,j}=0
+```
+
+学習後のGranger因果行列は、ラグ方向のgate vector
+
+```math
+g_{i,j}
+=
+(G_{1,i,j},\ldots,G_{K,i,j})
+```
+
+から作る。
 
 ```math
 \hat{A}_{i,j}
 =
 \mathbf{1}
 \left[
-\left\|
-(G_{1,i,j}, \dots, G_{K,i,j})
-\right\|_2
->
-\tau
+\|g_{i,j}\|_2 > \tau
 \right]
 ```
 
-ここで、`\tau` は数値誤差対策のための小さな閾値である。現在の
-デフォルトは `1e-8` である。
+ここで、`\tau` は数値誤差対策のための閾値であり、デフォルトは `1e-8` である。
 
-### 3. 目的関数
+重要なのは、`\hat{A}` は状態依存係数の事後的な閾値処理ではなく、学習された `causal_gate` から構成される点である。
 
-学習目的関数は次である。
+### 6. 目的関数
+
+目的関数は、予測損失、時間方向の平滑化、NGC型正則化からなる。
 
 ```math
 \mathcal{L}
 =
 \mathcal{L}_{\mathrm{pred}}
 +
-\lambda_{\mathrm{smooth}}
-\mathcal{R}_{\mathrm{smooth}}
+\lambda_{\mathrm{smooth}}\mathcal{R}_{\mathrm{smooth}}
 +
 \mathcal{R}_{\mathrm{ngc}}
 ```
-
-ここで、`sparse_group_lasso` の場合は `\mathcal{R}_{\mathrm{ngc}}`
-自体が `sparse_group_lambda` と `sparse_l1_lambda` を含む。一方、
-`hierarchical_group_lasso` や legacy な `group_lasso` では、従来通り
-`lambda_ngc` が正則化全体の強さを制御する。
-
-ただし、optimizer として `ista` を用いる場合、NGC 正則化項は通常の
-勾配ステップには含めない。その代わり、causal gate に対して
-近接作用素を直接適用する。
-
-### 4. 予測損失
 
 予測損失は平均二乗誤差である。
 
@@ -398,338 +436,337 @@ G_{K,i,j}
 =
 \frac{1}{N}
 \sum_t
-\left\|
-x_t - \hat{x}_t
-\right\|_2^2
+\|x_t-\hat{x}_t\|_2^2
 ```
 
-実装では次を用いる。
+`optimizer="ista"` の場合、`\mathcal{R}_{\mathrm{ngc}}` は通常の勾配計算には含めず、勾配ステップ後に `causal_gate` へ近接作用素として適用する。
 
-```python
-nn.MSELoss(reduction="mean")
-```
+### 7. Temporal Smoothness
 
-### 5. 時間方向の平滑化ペナルティ
+GVARは時点ごとに係数行列を出力するため、係数が過度に振動する可能性がある。そこで、有効係数の時間変化に平滑化ペナルティを課す。
 
-GVAR は時点ごとに状態依存係数を生成するため、係数が過度に振動しない
-ように平滑化ペナルティを導入する。
-
-時点 `t` における有効係数テンソルを `\tilde{\Phi}_t` と表す。
-absolute mode では、平滑化ペナルティは次である。
+absolute mode では次を用いる。
 
 ```math
 \mathcal{R}_{\mathrm{smooth}}
 =
 \frac{1}{|\mathcal{T}|}
-\sum_{t \in \mathcal{T}}
-\left\|
-\tilde{\Phi}_{t+1}
--
-\tilde{\Phi}_t
-\right\|_F^2
+\sum_{t\in\mathcal{T}}
+\|\tilde{\Phi}_{t+1}-\tilde{\Phi}_{t}\|_F^2
 ```
 
-relative mode では、係数スケールで正規化した次のペナルティを用いる。
+relative mode では、係数スケールで正規化する。
 
 ```math
 \mathcal{R}_{\mathrm{smooth}}
 =
 \frac{1}{|\mathcal{T}|}
-\sum_{t \in \mathcal{T}}
+\sum_{t\in\mathcal{T}}
 \frac{
-\left\|
-\tilde{\Phi}_{t+1}
--
-\tilde{\Phi}_t
-\right\|_F^2
+\|\tilde{\Phi}_{t+1}-\tilde{\Phi}_{t}\|_F^2
 }{
-\left\|
-\tilde{\Phi}_t
-\right\|_F^2
-+
-\varepsilon
+\|\tilde{\Phi}_{t}\|_F^2+\varepsilon
 }
 ```
 
-実装では、`time_index` を用いて次を満たす隣接時点のみに平滑化
-ペナルティを課す。
+実装では `time_index` を用い、隣接時点 `t_{r+1}-t_r=1` の組にだけ平滑化を課す。これにより、複数系列やreplicateの境界をまたいだ不自然な平滑化を避ける。
 
-```math
-t_{r+1} - t_r = 1
-```
+### 8. NGC型正則化
 
-これにより、複数系列や複数 replicate がある場合でも、系列境界を
-またいだ smoothing を避ける。
+本実装では、`causal_gate` に対してNGC型正則化を適用する。主に次の2種類を使う。
 
-### 6. NGC 正則化
+- `sparse_group_lasso`
+- `hierarchical_group_lasso`
 
-#### 6.1 Sparse Group Lasso
+#### 8.1 Sparse Group Lasso
 
-現在の標準設定では、NGC 公式実装の `GSGL` を参考に sparse group lasso
-を用いる。target-source pair `(i, j)` ごとに、ラグ方向の gate vector
-を次のように定義する。
+Sparse Group Lassoは、edge全体をまとめて削除する圧力と、個別lagを削除する圧力を同時に与える。
+
+edge `j -> i` に対応するラグ方向のgate vectorを次で定義する。
 
 ```math
 g_{i,j}
 =
-(G_{1,i,j}, \dots, G_{K,i,j})
-\in \mathbb{R}^{K}
+(G_{1,i,j},\ldots,G_{K,i,j})
 ```
 
-sparse group lasso penalty は次である。
+正則化項は次である。
 
 ```math
-\mathcal{R}_{\mathrm{ngc}}
+\mathcal{R}_{\mathrm{SGL}}(G)
 =
 \lambda_{\mathrm{group}}
-\sum_{i=1}^{p}
-\sum_{j=1}^{p}
-\left\|
-g_{i,j}
-\right\|_2
+\sum_{i=1}^{p}\sum_{j=1}^{p}
+\|g_{i,j}\|_2
 +
 \lambda_{\mathrm{l1}}
-\sum_{k=1}^{K}
-\sum_{i=1}^{p}
-\sum_{j=1}^{p}
-\left|
-G_{k,i,j}
-\right|
+\sum_{k=1}^{K}\sum_{i=1}^{p}\sum_{j=1}^{p}
+|G_{k,i,j}|
 ```
 
-実装上は、これらを次の設定値で直接指定する。
+実装上、2つの強さは次の設定値で直接指定する。
 
 ```python
-sparse_group_lambda = 1e-2
-sparse_l1_lambda = 1e-3
+sparse_group_lambda = lambda_group
+sparse_l1_lambda = lambda_l1
 ```
 
-第1項は edge 単位の group sparsity を作り、ある pair `(i, j)` の全ラグを
-同時にゼロ化する方向に働く。これは Granger 非因果性に直接対応する。
+`sparse_group_lasso` では `lambda_ngc` は使わない。`lambda_ngc` を同時に指定するとエラーにする。
+
+第1項は、あるedge `j -> i` の全ラグをまとめてゼロにする方向に働く。第2項は、edge全体は残しつつ、特定ラグだけをゼロにする方向に働く。
+
+#### 8.2 Hierarchical Group Lasso
+
+Hierarchical Group Lassoは、ラグ方向に入れ子構造を持つgroup lassoである。目的は、不要な遠いラグを優先的に落とし、ラグの自動選択を行うことである。
+
+数式上のラグ `k` は `x_{t-k}` を意味するため、`k=1` が最も近いラグ、`k=K` が最も遠いラグである。この表記では、suffix groupを次で定義する。
 
 ```math
-x_j \not\to x_i
-```
-
-第2項は lag 単位の elementwise sparsity を作る。これにより、edge 全体は
-残しつつ、一部のラグだけをゼロ化することもできる。
-
-NGC 公式の cMLP では、入力層重みに hidden 次元があるため `GSGL` の
-最初の shrinkage は lag-level group shrinkage になる。本実装の
-`causal_gate` は各 lag の gate が scalar なので、その対応物は L1
-soft-thresholding になる。
-
-#### 6.2 Hierarchical Group Lasso
-
-optional に hierarchical group lasso も利用できる。
-
-現在の実装では、lag index `0` が最も古いラグに対応すると仮定している。
-この仮定の下で、nested prefix group を次のように定義する。
-
-```math
-g_{i,j}^{(k)}
+\mathcal{G}_{k,i,j}
 =
-(G_{1,i,j}, \dots, G_{k,i,j})
+(G_{k,i,j},G_{k+1,i,j},\ldots,G_{K,i,j})
 ```
 
-hierarchical penalty は次である。
+正則化項は次である。
 
 ```math
-\mathcal{R}_{\mathrm{hier}}
+\mathcal{R}_{\mathrm{HGL}}(G)
 =
+\lambda_{\mathrm{ngc}}
+\sum_{i=1}^{p}\sum_{j=1}^{p}
 \sum_{k=1}^{K}
-\sum_{i=1}^{p}
-\sum_{j=1}^{p}
-\left\|
-g_{i,j}^{(k)}
-\right\|_2
+\|\mathcal{G}_{k,i,j}\|_2
 ```
 
-この解釈が成立するには、データセットの lag ordering が次を満たす必要が
-ある。
+一方、実装テンソルは次の順序でラグを持つ。
 
 ```python
-inputs[:, 0, :] = x_{t-K}
-inputs[:, K-1, :] = x_{t-1}
+inputs[:, 0, :]     = x_{t-K}
+inputs[:, K - 1, :] = x_{t-1}
 ```
 
-もし逆順の lag ordering を用いる場合、hierarchical penalty の方向を
-反転する必要がある。
+つまり、テンソル添字では `0` が最も遠いラグである。そのため、実装上のHGL更新はprefix blockに対して行う。
 
-### 7. 最適化
+```math
+B_{r,i,j}
+=
+(G^{\mathrm{store}}_{1,i,j},\ldots,G^{\mathrm{store}}_{r,i,j})
+```
 
-本実装では、optimizer として次の2つを選択できる。
+このprefix更新は、数式上のsuffix group `\mathcal{G}_{k,i,j}` と同じ意味である。ラグの並びが逆に見えるだけなので注意する。
+
+`hierarchical_group_lasso` では、正則化の強さは `lambda_ngc` で指定する。
 
 ```python
-optimizer = "adam"
+lambda_ngc = lambda_ngc
 ```
 
-または
+### 9. ISTAによる近接更新
 
-```python
-optimizer = "ista"
-```
+`optimizer="adam"` の場合、NGC正則化を損失に足して通常の勾配法で最適化する。ただし、Adamだけではgateが厳密なゼロになりにくい。
 
-`adam` を用いる場合、目的関数全体を通常の勾配法で最適化する。ただし、
-Adam では causal gate が厳密にゼロになりにくい。exact sparsity を
-重視する場合は `ista` を用いる。
-
-`ista` を用いる場合、まず smooth part のみに対して勾配ステップを行う。
+`optimizer="ista"` の場合、まずsmooth partに対して通常の勾配ステップを行う。
 
 ```math
 \mathcal{L}_{\mathrm{smooth\text{-}part}}
 =
 \mathcal{L}_{\mathrm{pred}}
 +
-\lambda_{\mathrm{smooth}}
-\mathcal{R}_{\mathrm{smooth}}
+\lambda_{\mathrm{smooth}}\mathcal{R}_{\mathrm{smooth}}
 ```
 
-勾配ステップは次である。
-
 ```math
-\theta^{(m+1/2)}
+G^{(m+1/2)}
 =
-\theta^{(m)}
+G^{(m)}
 -
 \eta
-\nabla_{\theta}
+\nabla_G
 \mathcal{L}_{\mathrm{smooth\text{-}part}}
 ```
 
-その後、causal gate `G` に対して sparse group lasso の近接作用素を
-適用する。
+その後、正則化に対応する近接作用素を `causal_gate` に直接適用する。
 
 ```math
 G^{(m+1)}
 =
-\mathrm{prox}_{
-\eta \mathcal{R}_{\mathrm{ngc}}
-}
-\left(
-G^{(m+1/2)}
-\right)
+\operatorname{prox}_{\eta\mathcal{R}_{\mathrm{ngc}}}
+\left(G^{(m+1/2)}\right)
 ```
 
-### 8. Sparse Group Lasso の近接作用素
+以下では、`U=G^{(m+1/2)}` とおく。
 
-本実装では、NGC 公式の `GSGL` と同じ順序で近接更新を行う。
+#### 9.1 Sparse Group Lassoの正確な近接更新
 
-まず elementwise soft-thresholding により lag 単位の sparsity を作る。
+Sparse Group Lassoでは、実装上、NGC公式実装の `GSGL` と同じ順序で更新する。まずL1 soft-thresholdingを行い、次にedge単位のgroup soft-thresholdingを行う。
 
-```math
-G_{k,i,j}
-\leftarrow
-\mathrm{sign}(G_{k,i,j})
-\left(
-\left|G_{k,i,j}\right|
--
-\eta \lambda_{\mathrm{l1}}
-\right)_+
-```
-
-次に、各 pair `(i, j)` の lag vector `g_{i,j}` に対して group
-soft-thresholding を行う。
+**Step 1: elementwise L1 soft-thresholding**
 
 ```math
-g_{i,j}
-\leftarrow
-\left(
-1
--
-\frac{
-\eta \lambda_{\mathrm{group}}
-}{
-\left\|
-g_{i,j}
-\right\|_2
-}
-\right)_+
-g_{i,j}
-```
-
-この2段階の近接更新により、個別の lag gate と Granger edge 全体の
-両方に厳密なゼロが生じる。
-
-### 9. Graph Inference
-
-学習後、モデルは全データに対して有効係数テンソルを計算する。
-
-係数ベースの causal strength は、係数の絶対値を batch 方向および lag
-方向に集約して得る。max aggregation の場合、causal strength は次である。
-
-```math
-S_{i,j}
+Z_{k,i,j}
 =
-\max_{t,k}
-\left|
-\tilde{\Phi}_{k,i,j}(x_{t-k})
-\right|
+\operatorname{sign}(U_{k,i,j})
+\left(
+|U_{k,i,j}|-
+\eta\lambda_{\mathrm{l1}}
+\right)_+
 ```
 
-ただし、causal gate が存在する場合、最終的な causal graph は coefficient
-thresholding ではなく gate norm から推定する。
+ここで、`(a)_+=\max(a,0)` である。
+
+**Step 2: lag vectorに対するgroup soft-thresholding**
+
+各edge `j -> i` について、
+
+```math
+z_{i,j}
+=
+(Z_{1,i,j},\ldots,Z_{K,i,j}),
+\qquad
+n_{i,j}=\|z_{i,j}\|_2
+```
+
+とおく。このとき、更新後のgate vectorは
+
+```math
+G^{(m+1)}_{:,i,j}
+=
+\begin{cases}
+0,
+& n_{i,j}\leq \eta\lambda_{\mathrm{group}},\\[0.6em]
+\left(
+1-
+\dfrac{\eta\lambda_{\mathrm{group}}}{n_{i,j}}
+\right)z_{i,j},
+& n_{i,j}>\eta\lambda_{\mathrm{group}}.
+\end{cases}
+```
+
+したがって、L1項により個別lagがゼロになり、group項によりedge全体がゼロになる。
+
+#### 9.2 Hierarchical Group Lassoの正確な近接更新
+
+Hierarchical Group Lassoでは、入れ子になったgroupに対して、順番にgroup soft-thresholdingを適用する。
+
+実装の保存順序では、`G^{\mathrm{store}}_{1}` が最も遠いラグ、`G^{\mathrm{store}}_{K}` が最も近いラグである。`U=G^{(m+1/2)}` とし、初期値を
+
+```math
+Z^{(0)}=U
+```
+
+とする。`r=1,\ldots,K` について、各edge `j -> i` のprefix blockを
+
+```math
+b_{r,i,j}^{(r-1)}
+=
+(Z^{(r-1)}_{1,i,j},\ldots,Z^{(r-1)}_{r,i,j})
+```
+
+と定義する。そのノルムを
+
+```math
+n_{r,i,j}
+=
+\|b_{r,i,j}^{(r-1)}\|_2
+```
+
+とおく。更新は次である。
+
+```math
+b_{r,i,j}^{(r)}
+=
+\begin{cases}
+0,
+& n_{r,i,j}\leq \eta\lambda_{\mathrm{ngc}},\\[0.6em]
+\left(
+1-
+\dfrac{\eta\lambda_{\mathrm{ngc}}}{n_{r,i,j}}
+\right)b_{r,i,j}^{(r-1)},
+& n_{r,i,j}>\eta\lambda_{\mathrm{ngc}}.
+\end{cases}
+```
+
+そして、`\ell \leq r` の成分をこの `b_{r,i,j}^{(r)}` で置き換え、`\ell>r` の成分はそのステップでは変更しない。これを `r=1` から `K` まで繰り返し、最終的に
+
+```math
+G^{(m+1)}=Z^{(K)}
+```
+
+とする。
+
+この更新は、数式上のsuffix group
+
+```math
+(G_{k,i,j},\ldots,G_{K,i,j})
+```
+
+に対するHGL近接更新と対応している。ただし、実装ではラグを古い順に保存しているため、コード上は `param[:lag_idx + 1]` というprefix更新になる。
+
+### 10. 事後的な閾値処理との違い
+
+事後的な閾値処理では、学習中には小さい非ゼロ値のedgeが予測に使われる。その後で係数や重みを閾値以下だからゼロとみなす。
+
+一方、ISTAによる近接更新では、学習過程の途中でgateそのものが厳密にゼロになる。ゼロになったedgeは、その後のforward計算で予測に使われない。
+
+したがって、近接勾配法の利点は単に「最後に0/1を決める」ことではなく、構造選択が学習過程に組み込まれる点にある。
+
+### 11. 学習後の解釈
+
+学習後は、主に2つを見る。
+
+1. `causal_gate` から作るGranger因果行列 `\hat{A}`
+2. 有効係数 `\tilde{\Phi}_{k,t}` の大きさと符号
+
+因果行列は次で作る。
 
 ```math
 \hat{A}_{i,j}
 =
 \mathbf{1}
 \left[
-\left\|
-g_{i,j}
-\right\|_2
->
-\tau
+\|g_{i,j}\|_2>\tau
 \right]
 ```
 
-### 10. Parameter Groups
+`\hat{A}_{i,j}=1` なら、変数 `j` の過去が変数 `i` の予測に寄与すると判定する。
 
-optimizer では、パラメータを次の2グループに分ける。
-
-```python
-coefficient_network_parameters
-causal_gate_parameters
-```
-
-coefficient-generating neural networks には optional に weight decay を
-適用できる。
+一方、有効係数
 
 ```math
-\lambda_{\mathrm{wd}}
-\left\|
-\theta_{\Phi}
-\right\|_2^2
+\tilde{\Phi}_{k,t,i,j}
+=
+G_{k,i,j}\Phi_{k,i,j}(x_{t-k})
 ```
 
-一方で、causal gate には weight decay を適用しない。causal gate の
-sparsity は通常の weight decay ではなく、近接作用素により制御する。
+を見ることで、どのラグで、どの符号で、どの程度の効果が現れているかを確認できる。
 
-### 11. 学習ログ
+### 12. 実験と可視化
 
-`verbose` と `log_every` により学習ログを表示できる。
+スライドでは、次のデータで構造推定性能を確認している。
 
-```python
-verbose = 1
-log_every = 10
-```
+1. 線形時系列データ
+2. 非線形時系列データ
+3. Lorenz-96データ
 
-表示される主な値は次の通りである。
+Lorenz-96は、スパースで非線形な相互作用を含む多変量時系列であり、真の構造が既知であるため、Granger構造推定の評価に使いやすい。
 
-- `loss`: 予測損失、smoothness、NGC 正則化を含むログ用損失
-- `mse`: 予測損失
-- `ngc`: causal gate に対する sparse group lasso penalty
-- `smooth`: 時間方向の平滑化 penalty
-- `active_edges`: gate norm が閾値を超える Granger edge の数
+可視化では、次の2種類が重要である。
 
-### 12. まとめ
+- `plot_causal_gate_by_lag`: ラグごとの `causal_gate` ヒートマップ
+- `plot_edge_lag_boxplots`: edgeごとの有効係数分布
 
-本アルゴリズムの特徴は次の通りである。
+`causal_gate` は構造の有無を、有効係数は効果の大きさと符号を表す。
 
-1. GVAR により、非線形かつ状態依存的な自己回帰ダイナミクスを表現する。
-2. static causal gate により、構造的 Granger sparsity と動的係数変動を分離する。
-3. sparse group lasso により、edge 全体の削除と lag 単位の削除を同時に扱う。
-4. proximal gradient update により、causal gate に厳密なゼロを生成する。
-5. gate group が厳密にゼロであることは Granger 非因果性に対応する。
-6. temporal smoothness regularization により、状態依存係数の過度な時間変動を抑制する。
-7. causal graph は coefficient thresholding ではなく gate norm に基づいて推定する。
+### 13. まとめ
+
+本手法の特徴は次の通りである。
+
+1. GVARにより、非線形・状態依存的な自己回帰係数を学習する。
+2. `causal_gate` により、動的係数と静的なGranger構造を分離する。
+3. Sparse Group Lassoにより、edge単位の削除とlag単位の削除を同時に扱う。
+4. Hierarchical Group Lassoにより、ラグ方向の入れ子構造を利用したラグ選択を行う。
+5. ISTAの近接更新により、`causal_gate` に厳密なゼロを生成する。
+6. Granger因果行列は、状態依存係数の事後的な閾値処理ではなく、gate normに基づいて構成する。
+7. 有効係数を見ることで、効果の符号やラグごとの分布も解釈できる。
+
+今後の課題としては、`causal_gate` が静的であり因果構造の時間変化を直接表さない点、gateと係数の識別性、実データへの適用可能性が挙げられる。
