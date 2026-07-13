@@ -275,20 +275,20 @@ rather than exact structural zeros.
 
 $p$変量時系列を次で表す。
 
-$$
+```math
 x_t = (x_{t,1}, \ldots, x_{t,p})^\top \in \mathbb{R}^{p}
-$$
+```
 
 通常のVARは、過去の値の線形結合により現在の値を予測する。
 
-$$
+```math
 x_t
 =
 \sum_{k=1}^{K}
 \Phi_k x_{t-k}
 +
 \varepsilon_t
-$$
+```
 
 ここで、$K$ は自己回帰次数、$\Phi_k \in \mathbb{R}^{p \times p}$ はラグ $k$ の係数行列である。$\Phi_{k,i,j}$ は「変数 $j$ の $k$ 期前の値が、変数 $i$ の現在値に与える線形効果」と解釈できる。
 
@@ -315,29 +315,29 @@ causal_gate.shape == [lag, target, source]
 
 ラグ付き入力を次のように表す。
 
-$$
+```math
 X_t = (x_{t-K}, \ldots, x_{t-1})
-$$
+```
 
 GVARの係数出力モデルは、各ラグに対して状態依存係数行列を出力する。
 
-$$
+```math
 \Phi_{k}(x_{t-k}) \in \mathbb{R}^{p \times p}
-$$
+```
 
 本手法では、各ラグの係数行列に `causal_gate` を掛け、有効係数を定義する。
 
-$$
+```math
 \tilde{\Phi}_{k,t}
 =
 G_k \odot \Phi_k(x_{t-k})
-$$
+```
 
 ここで、$\odot$ はHadamard積であり、$G_k \in \mathbb{R}^{p \times p}$ はラグ $k$ の構造ゲートである。
 
 最終的な一歩先予測は次である。
 
-$$
+```math
 \hat{x}_t
 =
 \sum_{k=1}^{K}
@@ -345,7 +345,7 @@ $$
 =
 \sum_{k=1}^{K}
 \left(G_k \odot \Phi_k(x_{t-k})\right)x_{t-k}
-$$
+```
 
 実装上、係数テンソルとゲートは次の形を持つ。
 
@@ -362,23 +362,23 @@ $\Phi_k(x_{t-k})$ は入力値依存であるため、ある時点では係数�
 
 そこで、構造の有無は `causal_gate` に担当させる。
 
-$$
+```math
 \tilde{\Phi}_{k,t,i,j}
 =
 G_{k,i,j}\Phi_{k,i,j}(x_{t-k})
-$$
+```
 
 もし全てのラグで
 
-$$
+```math
 G_{1,i,j}=G_{2,i,j}=\cdots=G_{K,i,j}=0
-$$
+```
 
 であれば、任意の入力値に対して
 
-$$
+```math
 \tilde{\Phi}_{k,t,i,j}=0
-$$
+```
 
 となる。つまり、変数 $j$ の過去は変数 $i$ の予測に使われない。
 
@@ -386,40 +386,40 @@ $$
 
 本実装では、変数 $x_j$が変数 $x_i$ をGranger causeしない十分条件を、全ラグにおける gate のゼロとして表す。
 
-$$
+```math
 x_j \not\to x_i
 \quad\Longleftarrow\quad
 G_{1,i,j}=\cdots=G_{K,i,j}=0
-$$
+```
 
 学習後のGranger因果行列は、ラグ方向のgate vector
 
-$$
+```math
 g_{i,j}
 =
 (G_{1,i,j},\ldots,G_{K,i,j})
-$$
+```
 
 から作る。
 
-$$
+```math
 \hat{A}_{i,j}
 =
 \mathbf{1}
 \left[
 \|g_{i,j}\|_2 > \tau
 \right]
-$$
+```
 
 ここで、$\tau$ は数値誤差対策のための閾値であり、デフォルトは `1e-8` である。
 
-重要なのは、`\hat{A}` は状態依存係数の事後的な閾値処理ではなく、学習された `causal_gate` から構成される点である。
+重要なのは、$\hat{A}$ は状態依存係数の事後的な閾値処理ではなく、学習された `causal_gate` から構成される点である。
 
 ### 6. 目的関数
 
 目的関数は、予測損失、時間方向の平滑化、NGC型正則化からなる。
 
-$$
+```math
 \mathcal{L}
 =
 \mathcal{L}_{\mathrm{pred}}
@@ -427,17 +427,17 @@ $$
 \lambda_{\mathrm{smooth}}\mathcal{R}_{\mathrm{smooth}}
 +
 \mathcal{R}_{\mathrm{ngc}}
-$$
+```
 
 予測損失は平均二乗誤差である。
 
-$$
+```math
 \mathcal{L}_{\mathrm{pred}}
 =
 \frac{1}{N}
 \sum_t
 \|x_t-\hat{x}_t\|_2^2
-$$
+```
 
 `optimizer="ista"` の場合、$\mathcal{R}_{\mathrm{ngc}}$は通常の勾配計算には含めず、勾配ステップ後に `causal_gate` へ近接作用素として適用する。
 
@@ -447,17 +447,17 @@ GVARは時点ごとに係数行列を出力するため、係数が過度に振�
 
 absolute mode では次を用いる。
 
-$$
+```math
 \mathcal{R}_{\mathrm{smooth}}
 =
 \frac{1}{|\mathcal{T}|}
 \sum_{t\in\mathcal{T}}
 \|\tilde{\Phi}_{t+1}-\tilde{\Phi}_{t}\|_F^2
-$$
+```
 
 relative mode では、係数スケールで正規化する。
 
-$$
+```math
 \mathcal{R}_{\mathrm{smooth}}
 =
 \frac{1}{|\mathcal{T}|}
@@ -467,7 +467,7 @@ $$
 }{
 \|\tilde{\Phi}_{t}\|_F^2+\varepsilon
 }
-$$
+```
 
 実装では `time_index` を用い、隣接時点 $t_{r+1}-t_r=1$ の組にだけ平滑化を課す。これにより、複数系列やreplicateの境界をまたいだ不自然な平滑化を避ける。
 
@@ -484,15 +484,15 @@ Sparse Group Lassoは、edge全体をまとめて削除する圧力と、個別l
 
 edge `j -> i` に対応するラグ方向のgate vectorを次で定義する。
 
-$$
+```math
 g_{i,j}
 =
 (G_{1,i,j},\ldots,G_{K,i,j})
-$$
+```
 
 正則化項は次である。
 
-$$
+```math
 \mathcal{R}_{\mathrm{SGL}}(G)
 =
 \lambda_{\mathrm{group}}
@@ -502,7 +502,7 @@ $$
 \lambda_{\mathrm{l1}}
 \sum_{k=1}^{K}\sum_{i=1}^{p}\sum_{j=1}^{p}
 |G_{k,i,j}|
-$$
+```
 
 実装上、2つの強さは次の設定値で直接指定する。
 
@@ -521,22 +521,22 @@ Hierarchical Group Lassoは、ラグ方向に入れ子構造を持つgroup lasso
 
 数式上のラグ $k$ は $x_{t-k}$ を意味するため、$k=1$ が最も近いラグ、$k=K$ が最も遠いラグである。この表記では、suffix groupを次で定義する。
 
-$$
+```math
 \mathcal{G}_{k,i,j}
 =
 (G_{k,i,j},G_{k+1,i,j},\ldots,G_{K,i,j})
-$$
+```
 
 正則化項は次である。
 
-$$
+```math
 \mathcal{R}_{\mathrm{HGL}}(G)
 =
 \lambda_{\mathrm{ngc}}
 \sum_{i=1}^{p}\sum_{j=1}^{p}
 \sum_{k=1}^{K}
 \|\mathcal{G}_{k,i,j}\|_2
-$$
+```
 
 一方、実装テンソルは次の順序でラグを持つ。
 
@@ -547,11 +547,11 @@ inputs[:, K - 1, :] = x_{t-1}
 
 つまり、テンソル添字では `0` が最も遠いラグである。そのため、実装上のHGL更新はprefix blockに対して行う。
 
-$$
+```math
 B_{r,i,j}
 =
 (G^{\mathrm{store}}_{1,i,j},\ldots,G^{\mathrm{store}}_{r,i,j})
-$$
+```
 
 このprefix更新は、数式上のsuffix group $\mathcal{G}_{k,i,j}$ と同じ意味である。ラグの並びが逆に見えるだけなので注意する。
 
@@ -567,15 +567,15 @@ lambda_ngc = lambda_ngc
 
 `optimizer="ista"` の場合、まずsmooth partに対して通常の勾配ステップを行う。
 
-$$
+```math
 \mathcal{L}_{\mathrm{smooth\text{-}part}}
 =
 \mathcal{L}_{\mathrm{pred}}
 +
 \lambda_{\mathrm{smooth}}\mathcal{R}_{\mathrm{smooth}}
-$$
+```
 
-$$
+```math
 G^{(m+1/2)}
 =
 G^{(m)}
@@ -583,16 +583,16 @@ G^{(m)}
 \eta
 \nabla_G
 \mathcal{L}_{\mathrm{smooth\text{-}part}}
-$$
+```
 
 その後、正則化に対応する近接作用素を `causal_gate` に直接適用する。
 
-$$
+```math
 G^{(m+1)}
 =
 \operatorname{prox}_{\eta\mathcal{R}_{\mathrm{ngc}}}
 \left(G^{(m+1/2)}\right)
-$$
+```
 
 以下では、$U=G^{(m+1/2)}$とおく。
 
@@ -602,7 +602,7 @@ Sparse Group Lassoでは、実装上、NGC公式実装の `GSGL` と同じ順序
 
 **Step 1: elementwise L1 soft-thresholding**
 
-$$
+```math
 Z_{k,i,j}
 =
 \operatorname{sign}(U_{k,i,j})
@@ -610,7 +610,7 @@ Z_{k,i,j}
 |U_{k,i,j}|-
 \eta\lambda_{\mathrm{l1}}
 \right)_+
-$$
+```
 
 ここで、$(a)_+=\max(a,0)$ である。
 
@@ -618,17 +618,17 @@ $$
 
 各edge `j -> i` について、
 
-$$
+```math
 z_{i,j}
 =
 (Z_{1,i,j},\ldots,Z_{K,i,j}),
 \qquad
 n_{i,j}=\|z_{i,j}\|_2
-$$
+```
 
 とおく。このとき、更新後のgate vectorは
 
-$$
+```math
 G^{(m+1)}_{:,i,j}
 =
 \begin{cases}
@@ -640,7 +640,7 @@ G^{(m+1)}_{:,i,j}
 \right)z_{i,j},
 & n_{i,j}>\eta\lambda_{\mathrm{group}}.
 \end{cases}
-$$
+```
 
 したがって、L1項により個別lagがゼロになり、group項によりedge全体がゼロになる。
 
@@ -650,29 +650,29 @@ Hierarchical Group Lassoでは、入れ子になったgroupに対して、順番
 
 実装の保存順序では、$G^{\mathrm{store}}_{1}$が最も遠いラグ、$G^{\mathrm{store}}_{K}$ が最も近いラグである。$U=G^{(m+1/2)}$ とし、初期値を
 
-$$
+```math
 Z^{(0)}=U
-$$
+```
 
 とする。$r=1,\ldots,K$ について、各edge `j -> i` のprefix blockを
 
-$$
+```math
 b_{r,i,j}^{(r-1)}
 =
 (Z^{(r-1)}_{1,i,j},\ldots,Z^{(r-1)}_{r,i,j})
-$$
+```
 
 と定義する。そのノルムを
 
-$$
+```math
 n_{r,i,j}
 =
 \|b_{r,i,j}^{(r-1)}\|_2
-$$
+```
 
 とおく。更新は次である。
 
-$$
+```math
 b_{r,i,j}^{(r)}
 =
 \begin{cases}
@@ -684,21 +684,21 @@ b_{r,i,j}^{(r)}
 \right)b_{r,i,j}^{(r-1)},
 & n_{r,i,j}>\eta\lambda_{\mathrm{ngc}}.
 \end{cases}
-$$
+```
 
 そして、$\ell \leq r$ の成分をこの $b_{r,i,j}^{(r)}$ で置き換え、$\ell>r$ の成分はそのステップでは変更しない。これを $r=1$から $K$ まで繰り返し、最終的に
 
-$$
+```math
 G^{(m+1)}=Z^{(K)}
-$$
+```
 
 とする。
 
 この更新は、数式上のsuffix group
 
-$$
+```math
 (G_{k,i,j},\ldots,G_{K,i,j})
-$$
+```
 
 に対するHGL近接更新と対応している。ただし、実装ではラグを古い順に保存しているため、コード上は `param[:lag_idx + 1]` というprefix更新になる。
 
@@ -719,24 +719,24 @@ $$
 
 因果行列は次で作る。
 
-$$
+```math
 \hat{A}_{i,j}
 =
 \mathbf{1}
 \left[
 \|g_{i,j}\|_2>\tau
 \right]
-$$
+```
 
 $\hat{A}_{i,j}=1$ なら、変数 $j$ の過去が変数 $i$ の予測に寄与すると判定する。
 
 一方、有効係数
 
-$$
+```math
 \tilde{\Phi}_{k,t,i,j}
 =
 G_{k,i,j}\Phi_{k,i,j}(x_{t-k})
-$$
+```
 
 を見ることで、どのラグで、どの符号で、どの程度の効果が現れているかを確認できる。
 
