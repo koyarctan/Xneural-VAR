@@ -596,7 +596,7 @@ G^{(m+1)}
 
 以下では、$`U=G^{(m+1/2)}`$とおく。
 
-#### 9.1 Sparse Group Lassoの正確な近接更新
+#### 9.1 Sparse Group Lassoの近接更新
 
 Sparse Group Lassoでは、実装上、NGC公式実装の `GSGL` と同じ順序で更新する。まずL1 soft-thresholdingを行い、次にedge単位のgroup soft-thresholdingを行う。
 
@@ -644,7 +644,7 @@ G^{(m+1)}_{:,i,j}
 
 したがって、L1項により個別lagがゼロになり、group項によりedge全体がゼロになる。
 
-#### 9.2 Hierarchical Group Lassoの正確な近接更新
+#### 9.2 Hierarchical Group Lassoの近接更新
 
 Hierarchical Group Lassoでは、入れ子になったgroupに対して、順番にgroup soft-thresholdingを適用する。
 
