@@ -32,3 +32,14 @@ benchmark = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["xneural_var*"]
+exclude = [
+    "slides*",
+    "figures*",
+    "experiments*",
+    "tests*",
+]
+namespaces = false
