@@ -562,11 +562,11 @@ ISTAでは次の2段階で\texttt{causal\_gate}を更新する。
 \begin{frame}{実験設計}
 \small
 
-次の3点を、同じ生成データ上で分けて検証する。
+次の3点を、検証する。
 \begin{enumerate}
-  \item 閾値を置かず、厳密ゼロからGranger因果グラフを得られるか
-  \item 真のグラフをどの程度回収できるか
-  \item 状態依存係数の符号を解釈できるか
+  \item 閾値を置かずにGranger因果グラフを得られるか
+  \item 真のGranger因果構造をどのとらえるか
+  \item 状態依存係数の符号は真の方向と一致するか
 \end{enumerate}
 
 \begin{table}
@@ -574,18 +574,18 @@ ISTAでは次の2段階で\texttt{causal\_gate}を更新する。
 \scriptsize
 \begin{tabular}{llll}
 \toprule
-データ & 系列長・次元 & 真の設定 & 推定設定 \\
+データ & 系列長・次元 & 生成の設定&モデル共通の設定 \\
 \midrule
-線形VAR(1) & $T=300,\ p=10$ & 非自己edge 20本 & $K=5$, 5 data seeds \\
-Lorenz-96 & $T=500,\ p=20$ & $F=10,40$ & $K=5$, 5 init. seeds \\
+線形VAR(1) & $T=300,\ p=10$ & 非自己edge 20本 & $K=5$, 5 seeds \\
+Lorenz-96 & $T=500,\ p=20$ & $F=10,40$ & $K=5$, 5 seeds \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{itemize}
-  \item 比較手法：GVAR、NGC(cMLP)、linear VAR。自己edgeは主評価から除外。
+  \item 比較手法：GVAR、NGC(cMLP)、linear VAR。
   \item neural modelは全データ・full batch、150 epoch。校正seedと評価seedを分離。
-  \item Xneural VARとcMLPは正則化パスを再学習し、各$\lambda$の厳密ゼロを評価。
+  \item cMLPと提案手法は各$\lambda$の厳密ゼロを評価。
 \end{itemize}
 \end{frame}
 
@@ -615,13 +615,12 @@ j \in \{i,\ i+1,\ i-1,\ i-2\}.
 \begin{itemize}
   \item NGC論文：$p=20$, $F\in\{10,40\}$, $T\in\{250,500,1000\}$で評価。
   \item 本実験：NGC著者コードに合わせ、$T=500$, $\Delta t=0.05$, burn-in 1000,
-        観測雑音$\mathcal{N}(0,0.1^2)$を使用。
-  \item GVAR論文でも$F=10,40$を使用。本比較では全手法へ同一のNGC生成データを与える。
+        観測ノイズ$\mathcal{N}(0,0.1^2)$を使用。
   \item 真の非自己edgeは$j\in\{i+1,i-1,i-2\}$の60本。
 \end{itemize}
 \end{frame}
 
-\begin{frame}{0/1 Granger因果グラフの判定規則}
+\begin{frame}{Granger因果の判定}
 \scriptsize
 
 \begin{table}
