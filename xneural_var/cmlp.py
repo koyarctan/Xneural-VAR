@@ -110,7 +110,34 @@ class CMLP(nn.Module):
                 f"expected inputs shape [batch, {self.order}, {self.num_vars}], "
                 f"got {tuple(inputs.shape)}"
             )
-        return torch.cat([network(inputs) for network in self.networks], dim=1)
+
+        # All target networks have the same architecture. Stacking their
+        # parameters evaluates the independent cMLPs in one batched operation
+        # while preserving the reference model's parameters and gradients.
+        first_weights = torch.stack([network.layers[0].weight for network in self.networks])
+        first_biases = torch.stack([network.layers[0].bias for network in self.networks])
+        flat_weights = first_weights.permute(0, 1, 3, 2).reshape(
+            self.num_vars * self.hidden_layer_size,
+            self.order * self.num_vars,
+        )
+        activations = torch.nn.functional.linear(
+            inputs.reshape(inputs.shape[0], -1),
+            flat_weights,
+            first_biases.reshape(-1),
+        ).reshape(inputs.shape[0], self.num_vars, self.hidden_layer_size)
+
+        for layer_idx in range(1, len(self.networks[0].layers)):
+            activations = torch.relu(activations)
+            weights = torch.stack(
+                [network.layers[layer_idx].weight.squeeze(-1) for network in self.networks]
+            )
+            biases = torch.stack([network.layers[layer_idx].bias for network in self.networks])
+            activations = torch.bmm(
+                activations.transpose(0, 1),
+                weights.transpose(1, 2),
+            ).transpose(0, 1) + biases.unsqueeze(0)
+
+        return activations.squeeze(-1)
 
     @torch.no_grad()
     def gc_strength(self, ignore_lag: bool = True) -> torch.Tensor:
@@ -176,50 +203,57 @@ def _ridge_penalty(model: CMLP, lam: float) -> torch.Tensor:
 
 
 def _cmlp_regularize(model: CMLP, config: CMLPTrainingConfig) -> torch.Tensor:
-    penalty = next(model.parameters()).new_zeros(())
-    for network in model.networks:
-        weight = network.first_weight
-        if config.regularizer == "none":
-            continue
-        if config.regularizer == "sparse_group_lasso":
-            if config.sparse_l1_lambda:
-                penalty = penalty + config.sparse_l1_lambda * torch.linalg.vector_norm(weight, ord=2, dim=0).sum()
-            if config.sparse_group_lambda:
-                penalty = penalty + config.sparse_group_lambda * torch.linalg.vector_norm(weight, ord=2, dim=(0, 2)).sum()
-        elif config.regularizer == "group_lasso":
-            penalty = penalty + config.lambda_ngc * torch.linalg.vector_norm(weight, ord=2, dim=(0, 2)).sum()
-        elif config.regularizer == "hierarchical_group_lasso":
-            for lag_idx in range(weight.shape[2]):
-                block = weight[:, :, : lag_idx + 1]
-                penalty = penalty + config.lambda_ngc * torch.linalg.vector_norm(block, ord=2, dim=(0, 2)).sum()
-        else:
-            raise ValueError(f"unsupported regularizer: {config.regularizer}")
-    return penalty
+    if config.regularizer == "none":
+        return next(model.parameters()).new_zeros(())
+
+    weights = torch.stack([network.first_weight for network in model.networks])
+    if config.regularizer == "sparse_group_lasso":
+        penalty = weights.new_zeros(())
+        if config.sparse_l1_lambda:
+            penalty = penalty + config.sparse_l1_lambda * torch.linalg.vector_norm(
+                weights, ord=2, dim=1
+            ).sum()
+        if config.sparse_group_lambda:
+            penalty = penalty + config.sparse_group_lambda * torch.linalg.vector_norm(
+                weights, ord=2, dim=(1, 3)
+            ).sum()
+        return penalty
+    if config.regularizer == "group_lasso":
+        return config.lambda_ngc * torch.linalg.vector_norm(weights, ord=2, dim=(1, 3)).sum()
+    if config.regularizer == "hierarchical_group_lasso":
+        return config.lambda_ngc * sum(
+            torch.linalg.vector_norm(weights[..., : lag_idx + 1], ord=2, dim=(1, 3)).sum()
+            for lag_idx in range(weights.shape[3])
+        )
+    raise ValueError(f"unsupported regularizer: {config.regularizer}")
 
 
 @torch.no_grad()
 def _prox_cmlp_(model: CMLP, config: CMLPTrainingConfig) -> None:
     if config.regularizer == "none":
         return
-    for network in model.networks:
-        weight = network.first_weight
-        if config.regularizer == "sparse_group_lasso":
-            if config.sparse_l1_lambda:
-                _prox_weight_group_(weight, config.sparse_l1_lambda, config.learning_rate, dims=0)
-            if config.sparse_group_lambda:
-                _prox_weight_group_(weight, config.sparse_group_lambda, config.learning_rate, dims=(0, 2))
-        elif config.regularizer == "group_lasso":
-            _prox_weight_group_(weight, config.lambda_ngc, config.learning_rate, dims=(0, 2))
-        elif config.regularizer == "hierarchical_group_lasso":
-            threshold = config.lambda_ngc * config.learning_rate
-            for lag_idx in range(weight.shape[2]):
-                block = weight[:, :, : lag_idx + 1]
-                norms = torch.linalg.vector_norm(block, ord=2, dim=(0, 2), keepdim=True)
-                scale = torch.clamp(1.0 - threshold / torch.clamp(norms, min=1e-12), min=0.0)
-                block.mul_(scale)
-                block.masked_fill_(norms <= threshold, 0.0)
-        else:
-            raise ValueError(f"unsupported regularizer: {config.regularizer}")
+
+    weights = torch.stack([network.first_weight for network in model.networks])
+    if config.regularizer == "sparse_group_lasso":
+        if config.sparse_l1_lambda:
+            _prox_weight_group_(weights, config.sparse_l1_lambda, config.learning_rate, dims=1)
+        if config.sparse_group_lambda:
+            _prox_weight_group_(weights, config.sparse_group_lambda, config.learning_rate, dims=(1, 3))
+    elif config.regularizer == "group_lasso":
+        _prox_weight_group_(weights, config.lambda_ngc, config.learning_rate, dims=(1, 3))
+    elif config.regularizer == "hierarchical_group_lasso":
+        threshold = config.lambda_ngc * config.learning_rate
+        for lag_idx in range(weights.shape[3]):
+            block = weights[..., : lag_idx + 1]
+            norms = torch.linalg.vector_norm(block, ord=2, dim=(1, 3), keepdim=True)
+            scale = torch.clamp(1.0 - threshold / torch.clamp(norms, min=1e-12), min=0.0)
+            block.mul_(scale)
+            block.masked_fill_(norms <= threshold, 0.0)
+    else:
+        raise ValueError(f"unsupported regularizer: {config.regularizer}")
+
+    for target_idx, network in enumerate(model.networks):
+        network.first_weight.copy_(weights[target_idx])
 
 
 @torch.no_grad()
@@ -307,12 +341,16 @@ def fit_cmlp(
             mse = criterion(preds, targets)
             ridge = _ridge_penalty(model, config.ridge_lambda)
             ngc_penalty = _cmlp_regularize(model, config)
+            # Neural-GC optimizes the sum of the p target-wise MSE losses.
+            # ``criterion`` averages over targets, so rescale it to preserve
+            # the reference objective and the published lambda scale.
+            smooth_loss = mse * model.num_vars + ridge
             if config.optimizer == "ista":
-                loss = mse + ridge
-                logged_loss = loss + ngc_penalty.detach()
+                loss = smooth_loss
+                logged_loss = (loss + ngc_penalty.detach()) / model.num_vars
             else:
-                loss = mse + ridge + ngc_penalty
-                logged_loss = loss
+                loss = smooth_loss + ngc_penalty
+                logged_loss = loss / model.num_vars
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
@@ -320,12 +358,14 @@ def fit_cmlp(
             if config.optimizer == "ista":
                 _prox_cmlp_(model, config)
                 ngc_penalty = _cmlp_regularize(model, config)
-                logged_loss = mse.detach() + ridge.detach() + ngc_penalty.detach()
+                logged_loss = (
+                    mse.detach() * model.num_vars + ridge.detach() + ngc_penalty.detach()
+                ) / model.num_vars
 
             totals["loss"] = totals["loss"] + logged_loss.detach()
             totals["mse"] = totals["mse"] + mse.detach()
-            totals["ngc"] = totals["ngc"] + ngc_penalty.detach()
-            totals["ridge"] = totals["ridge"] + ridge.detach()
+            totals["ngc"] = totals["ngc"] + ngc_penalty.detach() / model.num_vars
+            totals["ridge"] = totals["ridge"] + ridge.detach() / model.num_vars
             n_batches += 1
 
         metrics = {key: float((value / max(n_batches, 1)).detach().cpu()) for key, value in totals.items()}

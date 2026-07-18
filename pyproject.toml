@@ -13,6 +13,10 @@ dependencies = [
 viz = [
   "matplotlib>=3.7",
 ]
+benchmark = [
+  "matplotlib>=3.7",
+  "scipy>=1.10",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
