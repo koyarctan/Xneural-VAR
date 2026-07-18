@@ -576,8 +576,8 @@ ISTAでは次の2段階で\texttt{causal\_gate}を更新する。
 \toprule
 データ & 系列長・次元 & 生成の設定&モデル共通の設定 \\
 \midrule
-線形VAR(1) & $T=300,\ p=10$ & 非自己edge 20本 & $K=5$, 5 seeds \\
-Lorenz-96 & $T=500,\ p=20$ & $F=10,40$ & $K=5$, 5 seeds \\
+線形VAR & $T=500,\ p=10$ &  & $K=5$ \\
+Lorenz-96 & $T=500,1000\ p=20$ & $F=40$ & $K=5$\\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -620,130 +620,33 @@ j \in \{i,\ i+1,\ i-1,\ i-2\}.
 \end{itemize}
 \end{frame}
 
-\begin{frame}{Granger因果の判定}
-\scriptsize
 
-\begin{table}
-\centering
-\begin{tabular}{p{0.19\linewidth}p{0.72\linewidth}}
-\toprule
-手法 & 判定規則 \\
-\midrule
-Xneural VAR & $\|G_{:,i,j}\|_2>0$ならedgeあり。数値閾値なし。 \\
-NGC(cMLP) & 入力層のsource group normが厳密に0でなければedgeあり。 \\
-GVAR & 元系列と時間反転系列の係数強度が最も整合する分位点を選択（$Q=20$）。 \\
-linear VAR & sourceの全5ラグを同時に除くpartial F-test。BH法でFDR $q=0.05$。 \\
-\bottomrule
-\end{tabular}
-\end{table}
+\begin{frame}{線形データ：設計と比較結果}
 
-\begin{itemize}
-  \item \textbf{top-$k$や真のedge数は使用しない。}
-  \item Xneural VAR/cMLPのAUROC・AUPRC：$\lambda$を変えて再学習し、
-        edgeが厳密非ゼロで残る最大$\lambda$を順位scoreとする。
-  \item linear VARの順位scoreは$-\log_{10}(p)$、GVARは係数強度。固定0/1グラフは上表の規則。
-  \item 固定$\lambda$は別の校正seedでF1最大の値を選び、5評価seedへ固定する。
-\end{itemize}
 \end{frame}
 
-\begin{frame}{Xneural VAR：厳密ゼロの正則化パス}
-\centering
-\includegraphics[width=0.83\linewidth]{lorenz-96_f40_xneural_path.png}
-
-\vspace{-0.4em}
-\scriptsize
-$F=40$では$\lambda_{\mathrm{ngc}}=0.16$で平均75 edge、F1=0.685。
-$0.17$以上では非自己edgeがすべて0となる。Xneural VARの5パスではedgeの再出現は0件。
-\end{frame}
-
-\begin{frame}{Lorenz-96：構造推定結果}
-\centering
-\scriptsize
-\begin{table}
-\centering
-\begin{tabular}{clrrrr}
-\toprule
-$F$ & Method & AUROC & AUPRC & F1 & edge数 \\
-\midrule
-10 & Xneural VAR & 0.681 & 0.254 & 0.415 & 118.2 \\
-10 & \textbf{NGC(cMLP)} & \textbf{0.991} & \textbf{0.954} & \textbf{0.910} & 60.4 \\
-10 & GVAR & 0.578 & 0.220 & 0.235 & 102.2 \\
-10 & linear VAR ($q=.05$) & 0.866 & 0.690 & 0.506 & 27.0 \\
-\midrule
-40 & Xneural VAR & 0.840 & 0.514 & 0.685 & 75.0 \\
-40 & \textbf{NGC(cMLP)} & \textbf{0.954} & \textbf{0.792} & \textbf{0.744} & 96.0 \\
-40 & GVAR & 0.641 & 0.238 & 0.284 & 235.6 \\
-40 & linear VAR ($q=.05$) & 0.892 & 0.772 & 0.494 & 21.0 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{itemize}
-  \item neural modelは5初期値の平均。95\% CIを含む全結果はnotebookに出力。
-  \item Xneural VARはGVARを全指標で上回るが、NGC(cMLP)には及ばない。
-  \item $F=40$ではlinear VARよりF1が高く、厳密ゼロの固定グラフで非線形構造を回収した。
-\end{itemize}
-\end{frame}
-
-\begin{frame}{Lorenz-96 $(F=10)$：lag-wise causal gate}
+\begin{frame}{線形データ：causal gate}
   \centering
-  \includegraphics[width=0.91\linewidth]{lorenz96_f10_gate_by_lag_benchmark.png}
-
-  \vspace{-0.3em}
-  \scriptsize 校正seedで選択した$\lambda_{\mathrm{ngc}}=0.16$、評価seed 0のgate。
+  \includegraphics[width=0.92\linewidth]{linear_causal_gate.png}
 \end{frame}
 
-\begin{frame}{Lorenz-96 $(F=40)$：lag-wise causal gate}
+\begin{frame}{線形データ：有効係数の符号確認}
   \centering
-  \includegraphics[width=0.91\linewidth]{lorenz96_f40_gate_by_lag_benchmark.png}
-
-  \vspace{-0.3em}
-  \scriptsize
-  図は自己edgeを含む学習gate全体。評価表のみ自己edgeを除外している。
+  \includegraphics[width=0.95\linewidth]{linear_coef_boxplot.png}
 \end{frame}
 
-\begin{frame}{線形VAR(1)：設計と比較結果}
-\centering
-\scriptsize
+\begin{frame}{Lorenz-96(F=40,T=1000)：比較結果}
 
-$p=10,T=300$。正負の強いedge($|a|=0.34$)と弱いedge($|a|=0.20$)を各targetに置き、
-相関したinnovation($\rho=0.15$)を加える。真の次数1に対して$K=5$で推定する。
-
-\begin{table}
-\centering
-\begin{tabular}{lrrrrr}
-\toprule
-Method & AUROC & AUPRC & F1 & edge数 & sign acc. \\
-\midrule
-Xneural VAR ($\lambda=.12$) & 0.805 & 0.565 & 0.629 & 27.8 & 0.750 \\
-\textbf{NGC(cMLP)} ($\lambda=.40$) & \textbf{0.976} & \textbf{0.924} & \textbf{0.866} & 19.8 & -- \\
-GVAR & 0.570 & 0.286 & 0.329 & 52.4 & 0.930 \\
-linear VAR (F-test, BH) & 0.951 & 0.896 & 0.752 & 14.0 & 1.000 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\vspace{-0.2em}
-sign acc.は真の非ゼロ係数について、有効係数の時点中央値と真の符号が一致した割合。
-cMLPは入力層重みに符号付き有効係数の意味がないため対象外。
 \end{frame}
 
-\begin{frame}{線形VAR(1)：lag-wise causal gate}
+\begin{frame}{Lorenz-96(F=40,T=500)：比較結果}
+
+\end{frame}
+
+\begin{frame}{Lorenz-96(F=40,T=500)：$\lambda_{ngc}$によるスコア推移}
   \centering
-  \includegraphics[width=0.92\linewidth]{linear_var_gate_by_lag_benchmark.png}
+  \includegraphics[width=0.95\linewidth]{scores_by_lambda.png}
 \end{frame}
-
-\begin{frame}{線形VAR(1)：有効係数の符号確認}
-  \centering
-  \includegraphics[width=0.95\linewidth]{linear_var_signed_boxplots_benchmark.png}
-
-  \vspace{-0.3em}
-  \scriptsize
-  横軸はラグ、縦軸はcausal gateを通した時点別有効係数。
-  0に潰れた真のedgeも含め、成功例だけを選んでいない。
-\end{frame}
-
-
 
 \begin{frame}{まとめ}
   \footnotesize
@@ -779,7 +682,6 @@ cMLPは入力層重みに符号付き有効係数の意味がないため対象�
     \item causal gateは因果構造の変化を捉えない。
     \item causal gateの識別性(今は非負制約を課していない)
     \item $\lambda_{\mathrm{ngc}}$付近でedge数が急変するため、安定なチューニングが必要。
-    \item NGC(cMLP)との構造推定精度の差を縮める最適化・正則化設計。
     \item 実データへの適用可能性
   \end{itemize}
 \end{frame}
