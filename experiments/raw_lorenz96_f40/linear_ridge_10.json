@@ -1,0 +1,21 @@
+{
+  "method": "linear VAR",
+  "variant": "ridge VAR",
+  "param_name": "ridge",
+  "param_value": 10.0,
+  "elapsed_sec": 0.04593429999658838,
+  "auroc": 0.9436979166666667,
+  "auprc": 0.8581435616894225,
+  "top_k": 60.0,
+  "threshold": 0.13545055879049875,
+  "precision": 0.75,
+  "recall": 0.75,
+  "f1": 0.75,
+  "balanced_accuracy": 0.8515625,
+  "tp": 45.0,
+  "fp": 15.0,
+  "fn": 15.0,
+  "tn": 305.0,
+  "test_mse": 0.36605217263373396,
+  "native_edges_tau_1e-8": 380.0
+}

@@ -1,0 +1,21 @@
+{
+  "method": "Xneural VAR",
+  "variant": "ISTA + hierarchical group lasso",
+  "param_name": "lambda_ngc",
+  "param_value": 0.03,
+  "elapsed_sec": 15.476127299989457,
+  "auroc": 0.9999479166666667,
+  "auprc": 0.9997267759562842,
+  "top_k": 60.0,
+  "threshold": 0.057908885180950165,
+  "precision": 0.9833333333333333,
+  "recall": 0.9833333333333333,
+  "f1": 0.9833333333333333,
+  "balanced_accuracy": 0.9901041666666666,
+  "tp": 59.0,
+  "fp": 1.0,
+  "fn": 1.0,
+  "tn": 319.0,
+  "test_mse": 0.4683296875,
+  "native_edges_tau_1e-8": 379.0
+}

@@ -1,0 +1,5 @@
+method,variant,param_name,param_value,auroc,auprc,precision,recall,f1,balanced_accuracy,threshold,test_mse,sign_accuracy,elapsed_sec
+Xneural VAR,ISTA + hierarchical group lasso,lambda_ngc,0.01,1.0,1.0,1.0,1.0,1.0,1.0,0.17986583709716797,0.7311983276367188,1.0,33.66449219999777
+GVAR,coefficient elastic-net + smoothness,lambda_coeff,0.0,0.71,0.8013519761971775,0.6,0.6,0.6,0.6,0.8921711444854736,0.8049083374023438,,36.501239799996256
+cMLP,Neural-GC hierarchical group lasso,lambda_ngc,0.01,1.0,1.0,1.0,1.0,1.0,1.0,0.10682185739278793,0.7244654907226562,,233.93522980000125
+linear VAR,ridge VAR,ridge,1.0,1.0,1.0,1.0,1.0,1.0,1.0,0.22974474740442494,0.724068247586524,,0.011295299991616048

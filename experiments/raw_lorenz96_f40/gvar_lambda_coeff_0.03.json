@@ -1,0 +1,21 @@
+{
+  "method": "GVAR",
+  "variant": "coefficient elastic-net + smoothness",
+  "param_name": "lambda_coeff",
+  "param_value": 0.03,
+  "elapsed_sec": 24.603575399989495,
+  "auroc": 0.9800520833333334,
+  "auprc": 0.8979645361176148,
+  "top_k": 60.0,
+  "threshold": 0.5666072368621826,
+  "precision": 0.8166666666666667,
+  "recall": 0.8166666666666667,
+  "f1": 0.8166666666666667,
+  "balanced_accuracy": 0.8911458333333333,
+  "tp": 49.0,
+  "fp": 11.0,
+  "fn": 11.0,
+  "tn": 309.0,
+  "test_mse": 0.41069923095703126,
+  "native_edges_tau_1e-8": 380.0
+}
