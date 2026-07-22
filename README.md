@@ -367,7 +367,7 @@ $$G_{k,i,j}=0\quad\Longrightarrow\quad\frac{\partial \hat{x}_{i,t}}{\partial x_{
 
 $$G_{1,i,j}=\cdots=G_{K,i,j}=0$$
 
-なら、$x_j$ の過去から $x_i$ の予測への直接経路と係数生成経路がすべて遮断される。
+なら、$x_j$の過去から $x_i$ の予測への直接経路と係数生成経路がすべて遮断される。
 
 学習後のGranger因果行列は従来どおり
 
