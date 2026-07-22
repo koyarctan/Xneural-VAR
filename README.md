@@ -313,74 +313,63 @@ causal_gate.shape == [lag, target, source]
 
 ### 3. 提案手法の全体像
 
-ラグ付き入力を次のように表す。
+ラグ付き入力を
 
-```math
-X_t = (x_{t-K}, \ldots, x_{t-1})
-```
+$$X_t=(x_{t-K},\ldots,x_{t-1})$$
 
-GVARの係数出力モデルは、各ラグに対して状態依存係数行列を出力する。
+とする。ラグ $k$、ターゲット $i$ ごとにマスク済み入力
 
-```math
-\Phi_{k}(x_{t-k}) \in \mathbb{R}^{p \times p}
-```
+$$u_{k,i,t}=G_{k,i,:}\odot x_{t-k}$$
 
-本手法では、各ラグの係数行列に `causal_gate` を掛け、有効係数を定義する。
+を作り、ターゲット・ラグ別の係数生成器へ渡す。
 
-```math
-\tilde{\Phi}_{k,t}
-=
-G_k \odot \Phi_k(x_{t-k})
-```
+$$\Phi_{k,i,:}(u_{k,i,t})=f_{k,i}(u_{k,i,t})$$
 
-ここで、$`\odot`$ はHadamard積であり、$`G_k \in \mathbb{R}^{p \times p}`$ はラグ $`k`$ の構造ゲートである。
+最終予測は
 
-最終的な一歩先予測は次である。
+$$\hat{x}_{i,t}=\sum_{k=1}^{K}\sum_{j=1}^{p}G_{k,i,j}\Phi_{k,i,j}(G_{k,i,:}\odot x_{t-k})x_{j,t-k}$$
 
-```math
-\hat{x}_t
-=
-\sum_{k=1}^{K}
-\tilde{\Phi}_{k,t}x_{t-k}
-=
-\sum_{k=1}^{K}
-\left(G_k \odot \Phi_k(x_{t-k})\right)x_{t-k}
-```
+である。実装上の形状は次の通り。
 
-実装上、係数テンソルとゲートは次の形を持つ。
-
-```python
+```text
 coeffs.shape      == [batch, lag, target, source]
 causal_gate.shape == [lag, target, source]
 ```
 
-`coeffs` は入力値に依存してサンプルごとに変化する。一方、`causal_gate` は入力値に依存しない静的な構造パラメータである。
+### 4. Causal Gateによる全経路の構造制御
 
-### 4. Causal Gateによる構造制御
+`causal_gate` は次の両方へ作用する。
 
-$`\Phi_k(x_{t-k})`$ は入力値依存であるため、ある時点では係数が小さく、別の時点では大きくなることがある。そのため、状態依存係数だけを閾値処理してGranger因果性を判定すると、構造と状態依存的な効果が混ざってしまう。
+1. 変数 $x_j$ を直接乗じる有効係数
+2. ターゲット $i$ の係数生成器へ入る $x_j$ の入力経路
 
-そこで、構造の有無は `causal_gate` に担当させる。
+ターゲット軸をネットワーク内部で混合しないため、係数生成器は各 `(lag, target)` に独立したMLPを持ち、テンソル演算でベクトル化して実行する。選択された親変数同士の状態依存的相互作用は維持される。
 
-```math
-\tilde{\Phi}_{k,t,i,j}
-=
-G_{k,i,j}\Phi_{k,i,j}(x_{t-k})
-```
+ゲートは非負とし、構造の有無と強度を担当する。効果の正負は状態依存係数 $\Phi$ が担当する。
 
-もし全てのラグで
+$$G_{k,i,j}\geq 0$$
 
-```math
-G_{1,i,j}=G_{2,i,j}=\cdots=G_{K,i,j}=0
-```
+### 5. 本研究におけるGranger非因果性
 
-であれば、任意の入力値に対して
+$u_{k,i,j}=G_{k,i,j}x_{j,t-k}$ であるため、入力微分は
 
-```math
-\tilde{\Phi}_{k,t,i,j}=0
-```
+$$\frac{\partial \hat{x}_{i,t}}{\partial x_{j,t-k}}=G_{k,i,j}\left[\Phi_{k,i,j}+\sum_{\ell=1}^{p}G_{k,i,\ell}x_{\ell,t-k}\frac{\partial\Phi_{k,i,\ell}}{\partial u_{k,i,j}}\right]$$
 
-となる。つまり、変数 $`j`$ の過去は変数 $`i`$ の予測に使われない。
+となる。したがって、
+
+$$G_{k,i,j}=0\quad\Longrightarrow\quad\frac{\partial \hat{x}_{i,t}}{\partial x_{j,t-k}}=0.$$
+
+全ラグで
+
+$$G_{1,i,j}=\cdots=G_{K,i,j}=0$$
+
+なら、$x_j$ の過去から $x_i$ の予測への直接経路と係数生成経路がすべて遮断される。
+
+学習後のGranger因果行列は従来どおり
+
+$$\hat{A}_{i,j}=\mathbf{1}\left[\|G_{:,i,j}\|_2>\tau\right]$$
+
+で構成する。
 
 ### 5. 本研究におけるGranger非因果性
 
@@ -596,53 +585,22 @@ G^{(m+1)}
 
 以下では、$`U=G^{(m+1/2)}`$とおく。
 
-#### 9.1 Sparse Group Lassoの近接更新
+#### 9.1 Sparse Group Lassoの非負近接更新
 
-Sparse Group Lassoでは、実装上、NGC公式実装の `GSGL` と同じ順序で更新する。まずL1 soft-thresholdingを行い、次にedge単位のgroup soft-thresholdingを行う。
+構造ゲートには非負制約を課す。$U=G^{(m+1/2)}$ とすると、まず一方向のL1 thresholdingを適用する。
 
-**Step 1: elementwise L1 soft-thresholding**
+$$Z_{k,i,j}=\max\left(U_{k,i,j}-\eta\lambda_{\mathrm{l1}},0\right)$$
 
-```math
-Z_{k,i,j}
-=
-\mathrm{sign}(U_{k,i,j})
-\left(
-|U_{k,i,j}|-
-\eta\lambda_{\mathrm{l1}}
-\right)_+
-```
+次に、各edge `j -> i` のラグベクトル
 
-ここで、$`(a)_+=\max(a,0)`$ である。
+$$z_{i,j}=(Z_{1,i,j},\ldots,Z_{K,i,j}),\qquad n_{i,j}=\|z_{i,j}\|_2$$
 
-**Step 2: lag vectorに対するgroup soft-thresholding**
+へgroup shrinkageを適用する。
 
-各edge `j -> i` について、
+$$G^{(m+1)}_{:,i,j}=\begin{cases}0,&n_{i,j}\leq\eta\lambda_{\mathrm{group}},\\[0.6em]\left(1-\dfrac{\eta\lambda_{\mathrm{group}}}{n_{i,j}}\right)z_{i,j},&n_{i,j}>\eta\lambda_{\mathrm{group}}.\end{cases}$$
 
-```math
-z_{i,j}
-=
-(Z_{1,i,j},\ldots,Z_{K,i,j}),
-\qquad
-n_{i,j}=\|z_{i,j}\|_2
-```
+この更新はゲートの非負性を維持し、個別lagとedge全体の厳密なゼロを生成する。
 
-とおく。このとき、更新後のgate vectorは
-
-```math
-G^{(m+1)}_{:,i,j}
-=
-\begin{cases}
-0,
-& n_{i,j}\leq \eta\lambda_{\mathrm{group}},\\[0.6em]
-\left(
-1-
-\dfrac{\eta\lambda_{\mathrm{group}}}{n_{i,j}}
-\right)z_{i,j},
-& n_{i,j}>\eta\lambda_{\mathrm{group}}.
-\end{cases}
-```
-
-したがって、L1項により個別lagがゼロになり、group項によりedge全体がゼロになる。
 
 #### 9.2 Hierarchical Group Lassoの近接更新
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+import math
 from typing import Literal
 
 import numpy as np
@@ -73,7 +74,8 @@ def _validate_config(config: GVARTrainingConfig) -> None:
         raise ValueError("sparse_group_lambda must be non-negative")
     if config.sparse_l1_lambda < 0:
         raise ValueError("sparse_l1_lambda must be non-negative")
-
+    if not math.isfinite(config.gate_init) or config.gate_init < 0:
+        raise ValueError("gate_init must be non-negative")
     if config.regularizer == "sparse_group_lasso":
         if config.lambda_ngc != 0:
             raise ValueError(
@@ -88,7 +90,10 @@ def _validate_config(config: GVARTrainingConfig) -> None:
         )
 
 
-def _make_optimizer(config: GVARTrainingConfig, model: nn.Module) -> torch.optim.Optimizer:
+def _make_optimizer(
+    config: GVARTrainingConfig,
+    model: nn.Module,
+) -> torch.optim.Optimizer:
     gate_params = []
     coeff_params = []
     for name, param in model.named_parameters():
@@ -100,7 +105,10 @@ def _make_optimizer(config: GVARTrainingConfig, model: nn.Module) -> torch.optim
             coeff_params.append(param)
 
     param_groups = [
-        {"params": coeff_params, "weight_decay": config.coefficient_weight_decay},
+        {
+            "params": coeff_params,
+            "weight_decay": config.coefficient_weight_decay,
+        },
         {"params": gate_params, "weight_decay": 0.0},
     ]
     if config.optimizer == "adam":
@@ -110,12 +118,31 @@ def _make_optimizer(config: GVARTrainingConfig, model: nn.Module) -> torch.optim
     raise ValueError(f"unsupported optimizer: {config.optimizer}")
 
 
-def _to_torch_dataset(dataset: LaggedDataset, device: torch.device) -> _TorchLaggedDataset:
+def _to_torch_dataset(
+    dataset: LaggedDataset,
+    device: torch.device,
+) -> _TorchLaggedDataset:
     return _TorchLaggedDataset(
-        predictors=torch.as_tensor(dataset.predictors, dtype=torch.float32, device=device),
-        responses=torch.as_tensor(dataset.responses, dtype=torch.float32, device=device),
-        time_index=torch.as_tensor(dataset.time_index, dtype=torch.long, device=device),
-        series_index=torch.as_tensor(dataset.series_index, dtype=torch.long, device=device),
+        predictors=torch.as_tensor(
+            dataset.predictors,
+            dtype=torch.float32,
+            device=device,
+        ),
+        responses=torch.as_tensor(
+            dataset.responses,
+            dtype=torch.float32,
+            device=device,
+        ),
+        time_index=torch.as_tensor(
+            dataset.time_index,
+            dtype=torch.long,
+            device=device,
+        ),
+        series_index=torch.as_tensor(
+            dataset.series_index,
+            dtype=torch.long,
+            device=device,
+        ),
     )
 
 
@@ -155,11 +182,17 @@ def temporal_smoothness_penalty(
     adjacent = (sorted_t[1:] - sorted_t[:-1]) == 1
     if not torch.any(adjacent):
         return coeffs.new_zeros(())
+
     diffs = sorted_coeffs[1:][adjacent] - sorted_coeffs[:-1][adjacent]
     if mode == "absolute":
         return torch.mean(diffs.pow(2))
     if mode == "relative":
-        denom = sorted_coeffs[:-1][adjacent].pow(2).mean(dim=(1, 2, 3), keepdim=True) + eps
+        denom = (
+            sorted_coeffs[:-1][adjacent]
+            .pow(2)
+            .mean(dim=(1, 2, 3), keepdim=True)
+            + eps
+        )
         return torch.mean(diffs.pow(2) / denom)
     raise ValueError(f"unsupported smoothness mode: {mode}")
 
@@ -194,9 +227,9 @@ def _epoch(
     ):
         inputs = dataset.predictors[batch_idx]
         targets = dataset.responses[batch_idx]
-
         preds, coeffs = model(inputs)
         mse = criterion(preds, targets)
+
         if use_smoothness:
             time_index = dataset.time_index[batch_idx]
             smooth = config.lambda_smooth * temporal_smoothness_penalty(
@@ -223,12 +256,32 @@ def _epoch(
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()
+
             if config.optimizer == "ista":
                 if model.causal_gate is None:
                     raise RuntimeError("ISTA requires use_causal_gate=True")
-                ngc.prox_(model.causal_gate, config.learning_rate)
+                ngc.prox_(
+                    model.causal_gate,
+                    config.learning_rate,
+                    nonnegative=True,
+                )
                 ngc_penalty = ngc.penalty(model.causal_gate)
-                logged_loss = mse.detach() + smooth.detach() + ngc_penalty.detach()
+                logged_loss = (
+                    mse.detach()
+                    + smooth.detach()
+                    + ngc_penalty.detach()
+                )
+            else:
+                # Adam optimizes the regularized objective directly. Projection
+                # maintains the structural interpretation of the gate without
+                # replacing the exact-zero role of ISTA.
+                model.project_causal_gate_()
+                ngc_penalty = ngc.penalty(model.causal_gate)
+                logged_loss = (
+                    mse.detach()
+                    + smooth.detach()
+                    + ngc_penalty.detach()
+                )
 
         totals["loss"] = totals["loss"] + logged_loss.detach()
         totals["mse"] = totals["mse"] + mse.detach()
@@ -243,7 +296,10 @@ def _epoch(
 
 
 @torch.no_grad()
-def _gate_usage(model: GVARWithNGCGates, threshold: float) -> tuple[float, int, int]:
+def _gate_usage(
+    model: GVARWithNGCGates,
+    threshold: float,
+) -> tuple[float, int, int]:
     if model.causal_gate is None:
         return 0.0, 0, 0
     graph = model.causal_graph_from_gate(threshold=threshold)
@@ -265,7 +321,10 @@ def _log_epoch(
     if epoch != 1 and epoch != config.max_epochs and epoch % log_every != 0:
         return
 
-    usage_pct, active_edges, total_edges = _gate_usage(model, config.causal_threshold)
+    usage_pct, active_edges, total_edges = _gate_usage(
+        model,
+        config.causal_threshold,
+    )
     log_fn(
         f"Epoch {epoch:>4}/{config.max_epochs:<4} | "
         f"loss={metrics['loss']:.6g} | "
@@ -292,14 +351,16 @@ def _infer(
         coeffs_all.append(coeffs.cpu())
 
     coeffs_t = torch.cat(coeffs_all, dim=0)
-    strength_t = model.coefficient_strength(coeffs_t, aggregation=config.strength_aggregation)
-    
+    strength_t = model.coefficient_strength(
+        coeffs_t,
+        aggregation=config.strength_aggregation,
+    )
     if model.causal_gate is not None:
-      graph_t = model.causal_graph_from_gate(threshold=config.causal_threshold)
+        graph_t = model.causal_graph_from_gate(
+            threshold=config.causal_threshold,
+        )
     else:
-      graph_t = (strength_t > config.causal_threshold).to(torch.int64)
-
-
+        graph_t = (strength_t > config.causal_threshold).to(torch.int64)
     return coeffs_t.numpy(), strength_t.numpy(), graph_t.cpu().numpy()
 
 
@@ -310,15 +371,14 @@ def fit_gvar_ngc(
 ) -> FitResult:
     """Fit GVAR with NGC-style structured sparsity."""
     _validate_config(config)
-
     if config.seed is not None:
         np.random.seed(config.seed)
         torch.manual_seed(config.seed)
 
     dataset_np = construct_lagged_dataset(data, order=config.order)
     device = _resolve_device(config.device)
-
     num_vars = dataset_np.predictors.shape[-1]
+
     if model is None:
         model = GVARWithNGCGates(
             num_vars=num_vars,
@@ -329,6 +389,20 @@ def fit_gvar_ngc(
             gate_init=config.gate_init,
         )
     model.to(device)
+
+    if model.causal_gate is None:
+        raise ValueError("fit_gvar_ngc requires a model with use_causal_gate=True")
+    if model.order != config.order:
+        raise ValueError(
+            f"model order {model.order} does not match config order {config.order}"
+        )
+    if model.num_vars != num_vars:
+        raise ValueError(
+            f"model num_vars {model.num_vars} does not match data num_vars {num_vars}"
+        )
+    # A caller may pass a manually modified model. Project before the first
+    # forward pass so negative gates can never alter input signs.
+    model.project_causal_gate_()
 
     ngc = NGCRegularizer(
         name=config.regularizer,
@@ -341,7 +415,12 @@ def fit_gvar_ngc(
     optimizer = _make_optimizer(config, model)
     criterion = nn.MSELoss(reduction="mean")
     rng = np.random.default_rng(config.seed)
-    history: dict[str, list[float]] = {"loss": [], "mse": [], "ngc": [], "smooth": []}
+    history: dict[str, list[float]] = {
+        "loss": [],
+        "mse": [],
+        "ngc": [],
+        "smooth": [],
+    }
     dataset = _to_torch_dataset(dataset_np, device)
 
     for epoch in range(1, config.max_epochs + 1):
