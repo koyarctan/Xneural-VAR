@@ -8,7 +8,7 @@ from torch import nn
 
 AggregationName = Literal["max", "mean", "median"]
 
-
+# GVARの実装に必要なモジュール
 class LagwiseMLP(nn.Module):
     """Independent MLP per lag, evaluated as batched tensor operations.
 
@@ -66,7 +66,7 @@ class LagwiseMLP(nn.Module):
                 activations = torch.relu(activations)
         return activations
 
-
+# 提案手法の実装に必要なモジュール
 class TargetLagwiseMLP(nn.Module):
     """Independent MLP for every ``(lag, target)`` pair.
 
@@ -173,8 +173,6 @@ class GVARWithNGCGates(nn.Module):
     direct coefficient path nor an indirect coefficient-generation path to
     target ``i`` at lag ``k``.
     """
-
-    architecture_version = 2
 
     def __init__(
         self,

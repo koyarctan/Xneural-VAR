@@ -26,13 +26,12 @@ _PAPER_RC = {
 def _require_matplotlib():
     try:
         import matplotlib.pyplot as plt
-        from matplotlib.colors import TwoSlopeNorm
     except ModuleNotFoundError as exc:
         raise ModuleNotFoundError(
             "xneural_var visualization functions require matplotlib. "
             "Install it with `pip install matplotlib` or `pip install -e .[viz]`."
         ) from exc
-    return plt, TwoSlopeNorm
+    return plt
 
 
 def _to_numpy(value: Any) -> np.ndarray:
@@ -53,6 +52,8 @@ def _get_gate(result_or_model: Any) -> np.ndarray:
     gate_np = _to_numpy(gate)
     if gate_np.ndim != 3:
         raise ValueError("causal_gate must have shape [lag, target, source].")
+    if np.any(gate_np < 0):
+        raise ValueError("causal_gate must be non-negative.")
     return gate_np
 
 
@@ -82,21 +83,17 @@ def _summary_gate(gate: np.ndarray, summary: GateSummaryName) -> np.ndarray:
     if summary == "norm":
         return np.linalg.norm(gate, axis=0)
     if summary == "max":
-        return np.max(np.abs(gate), axis=0)
+        return np.max(gate, axis=0)
     if summary == "mean":
-        return np.mean(np.abs(gate), axis=0)
+        return np.mean(gate, axis=0)
     raise ValueError(f"unsupported gate summary: {summary}")
 
 
-def _heatmap_limits(mats: list[np.ndarray], signed: bool, percentile: float) -> tuple[float, float]:
+def _heatmap_limits(mats: list[np.ndarray], percentile: float) -> tuple[float, float]:
     values = np.concatenate([np.ravel(mat[np.isfinite(mat)]) for mat in mats])
     if values.size == 0:
-        return -1.0, 1.0
+        return 0.0, 1.0
     percentile = float(np.clip(percentile, 0.0, 100.0))
-    if signed:
-        vmax = float(np.percentile(np.abs(values), percentile))
-        vmax = max(vmax, np.finfo(float).eps)
-        return -vmax, vmax
     vmax = float(np.percentile(values, percentile))
     vmax = max(vmax, np.finfo(float).eps)
     return 0.0, vmax
@@ -142,7 +139,6 @@ def plot_causal_gate_by_lag(
     result_or_model: Any,
     *,
     variable_names: list[str] | tuple[str, ...] | None = None,
-    absolute: bool = True,
     include_summary: bool = True,
     summary: GateSummaryName = "norm",
     percentile: float = 99.0,
@@ -164,34 +160,27 @@ def plot_causal_gate_by_lag(
     result_or_model:
         A ``FitResult`` returned by ``fit_gvar_ngc`` or a ``GVARWithNGCGates``
         instance with ``use_causal_gate=True``.
-    absolute:
-        If true, plot ``abs(causal_gate)``. If false, plot signed gate values
-        with a diverging colormap.
     include_summary:
         If true, append a final panel summarizing gate strength over lags.
     summary:
         Summary used for the final panel: ``"norm"``, ``"max"``, or ``"mean"``.
     """
-    plt, TwoSlopeNorm = _require_matplotlib()
+    plt = _require_matplotlib()
     gate = _get_gate(result_or_model)
     order, n_targets, n_sources = gate.shape
     if n_targets != n_sources:
         raise ValueError("causal_gate must be square in target/source dimensions.")
 
     names = _resolve_variable_names(n_targets, variable_names)
-    signed = not absolute
-    gate_to_plot = np.abs(gate) if absolute else gate.copy()
-
-    mats = [gate_to_plot[lag_idx] for lag_idx in range(order)]
+    mats = [gate[lag_idx] for lag_idx in range(order)]
     titles = _lag_titles(order)
     if include_summary:
         summary_mat = _summary_gate(gate, summary)
         mats.append(summary_mat)
         titles.append(f"{summary} summary")
 
-    vmin, vmax = _heatmap_limits(mats, signed=signed, percentile=percentile)
-    cmap = cmap or ("coolwarm" if signed else "viridis")
-    norm = TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=vmax) if signed else None
+    vmin, vmax = _heatmap_limits(mats, percentile=percentile)
+    cmap = cmap or "viridis"
 
     n_panels = len(mats)
     if ncols is None:
@@ -226,9 +215,8 @@ def plot_causal_gate_by_lag(
             image = ax.imshow(
                 mat,
                 cmap=cmap,
-                vmin=None if signed else vmin,
-                vmax=None if signed else vmax,
-                norm=norm,
+                vmin=vmin,
+                vmax=vmax,
                 interpolation="nearest",
                 aspect="equal",
             )
@@ -250,7 +238,7 @@ def plot_causal_gate_by_lag(
         if image is not None:
             cax = fig.add_subplot(grid[:, -1])
             cbar = fig.colorbar(image, cax=cax)
-            cbar.set_label("|gate|" if absolute else "gate", rotation=270, labelpad=14)
+            cbar.set_label("gate", rotation=270, labelpad=14)
 
         _finish_figure(fig, save_path, dpi=dpi, show=show)
         return fig, axes
@@ -338,7 +326,7 @@ def plot_edge_lag_boxplots(
     strongest edges are selected from ``result.causal_strength``.
     """
     _get_gate(result)
-    plt, _ = _require_matplotlib()
+    plt = _require_matplotlib()
     coeffs = _get_coeffs(result)
     n_samples, order, n_targets, n_sources = coeffs.shape
     if n_targets != n_sources:

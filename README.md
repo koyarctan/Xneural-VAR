@@ -160,7 +160,6 @@ variable_names = [f"x{i}" for i in range(data.shape[1])]
 plot_causal_gate_by_lag(
     result,
     variable_names=variable_names,
-    absolute=True,
     summary="norm",
     percentile=99,
     tick_label_step=2,
