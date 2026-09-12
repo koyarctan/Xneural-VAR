@@ -61,8 +61,8 @@ print(result.causal_graph)
 Example training output:
 
 ```text
-Epoch    1/200  | loss=1.72 | mse=1.51 | ngc=0.21 | smooth=0 | active_edges=25/25 (100.00%)
-Epoch   10/200  | loss=1.38 | mse=1.22 | ngc=0.16 | smooth=0 | active_edges=18/25 (72.00%)
+Epoch    1/200  | loss=1.72 | mse=1.51 | ngc=0.21 | smooth=0 | jacobian=0 | active_edges=25/25 (100.00%)
+Epoch   10/200  | loss=1.38 | mse=1.22 | ngc=0.16 | smooth=0 | jacobian=0 | active_edges=18/25 (72.00%)
 ```
 
 ## Sparse Group Lasso
@@ -143,8 +143,75 @@ Training logs are controlled by `verbose` and `log_every`.
 
 - `verbose=0`: no logs.
 - `verbose=1`: print epoch, loss, MSE, NGC penalty, smoothness penalty, and
-  active edge count.
+  Jacobian penalty, and active edge count.
 - `log_every=10`: print every 10 epochs, plus the first and final epoch.
+
+## Coefficient--Jacobian Agreement
+
+XNeural-VAR's effective coefficient and the local prediction Jacobian are not
+generally identical because the coefficient generator itself depends on the
+lagged input. For target `i`, source `j`, and lag `k`, the diagnostic compares
+
+```math
+C_{t,k,i,j}
+\quad\text{with}\quad
+J_{t,k,i,j}
+=
+\frac{\partial \widehat{x}_{t,i}}
+{\partial x_{t-k,j}}.
+```
+
+Evaluate their agreement on lagged predictors as follows:
+
+```python
+from xneural_var import (
+    construct_lagged_dataset,
+    evaluate_jacobian_agreement,
+)
+
+lagged = construct_lagged_dataset(data, order=config.order)
+agreement = evaluate_jacobian_agreement(
+    result.model,
+    lagged.predictors,
+    batch_size=256,
+)
+
+print(agreement.mse)
+print(agreement.relative_frobenius_error)
+print(agreement.cosine_similarity)
+print(agreement.active_sign_agreement)
+```
+
+`coefficients`, `jacobian`, and `mismatch` all have shape
+`[sample, lag, target, source]`, with `mismatch = jacobian - coefficients`.
+The `active_*` summaries exclude structurally zero gate entries, preventing
+exact-zero paths from inflating the reported agreement.
+
+Agreement can optionally be encouraged during fitting:
+
+```python
+config = GVARTrainingConfig(
+    order=4,
+    hidden_layer_size=32,
+    lambda_jacobian=1e-3,
+)
+```
+
+This adds
+
+```math
+\mathcal{R}_{\mathrm{Jac}}
+=
+\lambda_{\mathrm{Jac}}
+\operatorname{mean}_{t,k,i,j}
+\left(J_{t,k,i,j} - C_{t,k,i,j}\right)^2
+```
+
+to the differentiable part of either the Adam or ISTA objective and records
+the weighted value in `result.history["jacobian"]`. The default is
+`lambda_jacobian=0.0`, so existing training behavior and cost are unchanged.
+Jacobian agreement and temporal smoothness constrain different properties and
+may be enabled independently or together.
 
 ## Visualization
 

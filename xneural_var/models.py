@@ -249,6 +249,16 @@ class GVARWithNGCGates(nn.Module):
         self,
         inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        _, coeffs, _ = self._coefficient_components(inputs)
+        preds = torch.einsum("bkij,bkj->bi", coeffs, inputs)
+        return preds, coeffs
+
+    def _coefficient_components(
+        self,
+        inputs: torch.Tensor,
+        *,
+        require_coefficient_input_grad: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         if inputs.ndim != 3:
             raise ValueError("inputs must have shape [batch, lag, variables]")
         if inputs.shape[1:] != (self.order, self.num_vars):
@@ -265,15 +275,67 @@ class GVARWithNGCGates(nn.Module):
                 self.num_vars,
             )
             coeffs = raw_coeffs
+            coefficient_inputs = None
         else:
             gate = self.causal_gate.unsqueeze(0)
             target_inputs = inputs.unsqueeze(2)
             coefficient_inputs = target_inputs * gate
+            if (
+                require_coefficient_input_grad
+                and not coefficient_inputs.requires_grad
+            ):
+                coefficient_inputs.requires_grad_(True)
             raw_coeffs = self.coeff_net(coefficient_inputs)
             coeffs = raw_coeffs * gate
+        return raw_coeffs, coeffs, coefficient_inputs
 
-        preds = torch.einsum("bkij,bkj->bi", coeffs, inputs)
-        return preds, coeffs
+    def forward_with_jacobian(
+        self,
+        inputs: torch.Tensor,
+        *,
+        create_graph: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return predictions, coefficients, their Jacobian, and mismatch.
+
+        The coefficient tensor and prediction Jacobian both use the layout
+        ``[batch, lag, target, source]``.  The Jacobian is
+        ``d prediction[target] / d inputs[lag, source]`` and ``mismatch`` is
+        ``jacobian - coefficients``.
+
+        Target/lag independence in :class:`TargetLagwiseMLP` makes it possible
+        to compute the mismatch with one vector-Jacobian product rather than
+        one reverse pass per target.  ``create_graph=True`` retains the graph
+        needed to optimize a penalty on this mismatch.
+        """
+        if self.causal_gate is None:
+            raise RuntimeError(
+                "forward_with_jacobian requires use_causal_gate=True"
+            )
+
+        # Keep diagnostics usable when the caller is in a no_grad context.
+        with torch.enable_grad():
+            raw_coeffs, coeffs, coefficient_inputs = (
+                self._coefficient_components(
+                    inputs,
+                    require_coefficient_input_grad=True,
+                )
+            )
+            if coefficient_inputs is None:  # Defensive type narrowing.
+                raise RuntimeError(
+                    "Jacobian shortcut requires gated coefficient inputs"
+                )
+            preds = torch.einsum("bkij,bkj->bi", coeffs, inputs)
+            contracted_derivative = torch.autograd.grad(
+                outputs=raw_coeffs,
+                inputs=coefficient_inputs,
+                grad_outputs=coefficient_inputs,
+                create_graph=create_graph,
+                retain_graph=create_graph,
+            )[0]
+            mismatch = contracted_derivative * self.causal_gate.unsqueeze(0)
+            jacobian = coeffs + mismatch
+
+        return preds, coeffs, jacobian, mismatch
 
     @torch.no_grad()
     def gate_group_norms(self) -> torch.Tensor:

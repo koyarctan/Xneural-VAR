@@ -27,6 +27,7 @@ class GVARTrainingConfig:
     learning_rate: float = 1e-3
     lambda_ngc: float = 0.0
     lambda_smooth: float = 0.0
+    lambda_jacobian: float = 0.0
     coefficient_weight_decay: float = 0.0
     regularizer: RegularizerName = "sparse_group_lasso"
     sparse_group_lambda: float = 0.0
@@ -74,6 +75,8 @@ def _validate_config(config: GVARTrainingConfig) -> None:
         raise ValueError("sparse_group_lambda must be non-negative")
     if config.sparse_l1_lambda < 0:
         raise ValueError("sparse_l1_lambda must be non-negative")
+    if not math.isfinite(config.lambda_jacobian) or config.lambda_jacobian < 0:
+        raise ValueError("lambda_jacobian must be non-negative")
     if not math.isfinite(config.gate_init) or config.gate_init < 0:
         raise ValueError("gate_init must be non-negative")
     if config.regularizer == "sparse_group_lasso":
@@ -214,9 +217,11 @@ def _epoch(
         "mse": torch.zeros((), device=device),
         "ngc": torch.zeros((), device=device),
         "smooth": torch.zeros((), device=device),
+        "jacobian": torch.zeros((), device=device),
     }
     n_batches = 0
     use_smoothness = config.lambda_smooth != 0
+    use_jacobian = config.lambda_jacobian != 0
 
     for batch_idx in _iter_batches(
         dataset.predictors.shape[0],
@@ -227,7 +232,15 @@ def _epoch(
     ):
         inputs = dataset.predictors[batch_idx]
         targets = dataset.responses[batch_idx]
-        preds, coeffs = model(inputs)
+        if use_jacobian:
+            preds, coeffs, _, mismatch = model.forward_with_jacobian(
+                inputs,
+                create_graph=train,
+            )
+            jacobian = config.lambda_jacobian * mismatch.pow(2).mean()
+        else:
+            preds, coeffs = model(inputs)
+            jacobian = preds.new_zeros(())
         mse = criterion(preds, targets)
 
         if use_smoothness:
@@ -246,10 +259,10 @@ def _epoch(
         ngc_penalty = ngc.penalty(model.causal_gate)
 
         if config.optimizer == "ista" and train:
-            loss = mse + smooth
+            loss = mse + smooth + jacobian
             logged_loss = loss + ngc_penalty.detach()
         else:
-            loss = mse + smooth + ngc_penalty
+            loss = mse + smooth + jacobian + ngc_penalty
             logged_loss = loss
 
         if train:
@@ -269,6 +282,7 @@ def _epoch(
                 logged_loss = (
                     mse.detach()
                     + smooth.detach()
+                    + jacobian.detach()
                     + ngc_penalty.detach()
                 )
             else:
@@ -280,6 +294,7 @@ def _epoch(
                 logged_loss = (
                     mse.detach()
                     + smooth.detach()
+                    + jacobian.detach()
                     + ngc_penalty.detach()
                 )
 
@@ -287,6 +302,7 @@ def _epoch(
         totals["mse"] = totals["mse"] + mse.detach()
         totals["ngc"] = totals["ngc"] + ngc_penalty.detach()
         totals["smooth"] = totals["smooth"] + smooth.detach()
+        totals["jacobian"] = totals["jacobian"] + jacobian.detach()
         n_batches += 1
 
     return {
@@ -331,6 +347,7 @@ def _log_epoch(
         f"mse={metrics['mse']:.6g} | "
         f"ngc={metrics['ngc']:.6g} | "
         f"smooth={metrics['smooth']:.6g} | "
+        f"jacobian={metrics['jacobian']:.6g} | "
         f"active_edges={active_edges}/{total_edges} ({usage_pct:.2f}%)"
     )
 
@@ -420,6 +437,7 @@ def fit_gvar_ngc(
         "mse": [],
         "ngc": [],
         "smooth": [],
+        "jacobian": [],
     }
     dataset = _to_torch_dataset(dataset_np, device)
 

@@ -35,3 +35,37 @@ def test_hierarchical_group_lasso_config_uses_lambda_ngc():
     result = fit_gvar_ngc(data, config)
 
     assert len(result.history["loss"]) == 1
+
+
+@pytest.mark.parametrize("optimizer", ["ista", "adam"])
+def test_optional_jacobian_regularization_is_logged(optimizer):
+    data = np.random.default_rng(2).normal(size=(16, 2)).astype("float32")
+    config = GVARTrainingConfig(
+        order=2,
+        hidden_layer_size=4,
+        max_epochs=1,
+        batch_size=7,
+        lambda_jacobian=0.1,
+        optimizer=optimizer,
+        verbose=0,
+    )
+
+    result = fit_gvar_ngc(data, config)
+
+    assert len(result.history["jacobian"]) == 1
+    assert result.history["jacobian"][0] >= 0.0
+    assert np.isfinite(result.history["jacobian"][0])
+
+
+def test_negative_jacobian_regularization_is_rejected():
+    data = np.random.default_rng(3).normal(size=(12, 2)).astype("float32")
+    config = GVARTrainingConfig(
+        order=2,
+        hidden_layer_size=4,
+        max_epochs=1,
+        lambda_jacobian=-0.1,
+        verbose=0,
+    )
+
+    with pytest.raises(ValueError, match="lambda_jacobian"):
+        fit_gvar_ngc(data, config)
