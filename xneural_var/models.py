@@ -249,7 +249,7 @@ class GVARWithNGCGates(nn.Module):
         self,
         inputs: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        _, coeffs, _ = self._coefficient_components(inputs)
+        _, coeffs, _, _ = self._coefficient_components(inputs)
         preds = torch.einsum("bkij,bkj->bi", coeffs, inputs)
         return preds, coeffs
 
@@ -258,7 +258,13 @@ class GVARWithNGCGates(nn.Module):
         inputs: torch.Tensor,
         *,
         require_coefficient_input_grad: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        detach_causal_gate: bool = False,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+    ]:
         if inputs.ndim != 3:
             raise ValueError("inputs must have shape [batch, lag, variables]")
         if inputs.shape[1:] != (self.order, self.num_vars):
@@ -276,8 +282,14 @@ class GVARWithNGCGates(nn.Module):
             )
             coeffs = raw_coeffs
             coefficient_inputs = None
+            causal_gate = None
         else:
-            gate = self.causal_gate.unsqueeze(0)
+            causal_gate = (
+                self.causal_gate.detach()
+                if detach_causal_gate
+                else self.causal_gate
+            )
+            gate = causal_gate.unsqueeze(0)
             target_inputs = inputs.unsqueeze(2)
             coefficient_inputs = target_inputs * gate
             if (
@@ -287,7 +299,43 @@ class GVARWithNGCGates(nn.Module):
                 coefficient_inputs.requires_grad_(True)
             raw_coeffs = self.coeff_net(coefficient_inputs)
             coeffs = raw_coeffs * gate
-        return raw_coeffs, coeffs, coefficient_inputs
+        return raw_coeffs, coeffs, coefficient_inputs, causal_gate
+
+    def _jacobian_components(
+        self,
+        inputs: torch.Tensor,
+        *,
+        create_graph: bool,
+        detach_causal_gate: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if self.causal_gate is None:
+            raise RuntimeError(
+                "Jacobian calculation requires use_causal_gate=True"
+            )
+
+        with torch.enable_grad():
+            raw_coeffs, coeffs, coefficient_inputs, causal_gate = (
+                self._coefficient_components(
+                    inputs,
+                    require_coefficient_input_grad=True,
+                    detach_causal_gate=detach_causal_gate,
+                )
+            )
+            if coefficient_inputs is None or causal_gate is None:
+                raise RuntimeError(
+                    "Jacobian shortcut requires gated coefficient inputs"
+                )
+            contracted_derivative = torch.autograd.grad(
+                outputs=raw_coeffs,
+                inputs=coefficient_inputs,
+                grad_outputs=coefficient_inputs,
+                create_graph=create_graph,
+                retain_graph=create_graph,
+            )[0]
+            mismatch = contracted_derivative * causal_gate.unsqueeze(0)
+            jacobian = coeffs + mismatch
+
+        return coeffs, jacobian, mismatch
 
     def forward_with_jacobian(
         self,
@@ -307,35 +355,33 @@ class GVARWithNGCGates(nn.Module):
         one reverse pass per target.  ``create_graph=True`` retains the graph
         needed to optimize a penalty on this mismatch.
         """
-        if self.causal_gate is None:
-            raise RuntimeError(
-                "forward_with_jacobian requires use_causal_gate=True"
-            )
-
-        # Keep diagnostics usable when the caller is in a no_grad context.
-        with torch.enable_grad():
-            raw_coeffs, coeffs, coefficient_inputs = (
-                self._coefficient_components(
-                    inputs,
-                    require_coefficient_input_grad=True,
-                )
-            )
-            if coefficient_inputs is None:  # Defensive type narrowing.
-                raise RuntimeError(
-                    "Jacobian shortcut requires gated coefficient inputs"
-                )
-            preds = torch.einsum("bkij,bkj->bi", coeffs, inputs)
-            contracted_derivative = torch.autograd.grad(
-                outputs=raw_coeffs,
-                inputs=coefficient_inputs,
-                grad_outputs=coefficient_inputs,
-                create_graph=create_graph,
-                retain_graph=create_graph,
-            )[0]
-            mismatch = contracted_derivative * self.causal_gate.unsqueeze(0)
-            jacobian = coeffs + mismatch
-
+        coeffs, jacobian, mismatch = self._jacobian_components(
+            inputs,
+            create_graph=create_graph,
+            detach_causal_gate=False,
+        )
+        preds = torch.einsum("bkij,bkj->bi", coeffs, inputs)
         return preds, coeffs, jacobian, mismatch
+
+    def coefficient_jacobian_mismatch_for_regularization(
+        self,
+        inputs: torch.Tensor,
+        *,
+        create_graph: bool = True,
+    ) -> torch.Tensor:
+        """Return ``J - C`` while treating the causal gate as fixed.
+
+        Both uses of the gate -- the coefficient-network input mask and the
+        output coefficient mask -- are detached.  The returned tensor keeps
+        gradients for coefficient-network parameters but cannot directly
+        shrink or remove causal gates.
+        """
+        _, _, mismatch = self._jacobian_components(
+            inputs,
+            create_graph=create_graph,
+            detach_causal_gate=True,
+        )
+        return mismatch
 
     @torch.no_grad()
     def gate_group_norms(self) -> torch.Tensor:

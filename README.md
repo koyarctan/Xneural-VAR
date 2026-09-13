@@ -213,6 +213,16 @@ the weighted value in `result.history["jacobian"]`. The default is
 Jacobian agreement and temporal smoothness constrain different properties and
 may be enabled independently or together.
 
+During training, the causal gate is treated as a fixed value only inside the
+Jacobian penalty. Both its coefficient-input mask and coefficient-output mask
+are detached in that branch. The gate continues to receive gradients from the
+prediction and smoothness objectives and continues to receive the configured
+NGC/ISTA proximal update. This separation prevents the model from reducing
+the Jacobian penalty merely by shrinking or deleting a causal edge; the
+coefficient generator must instead improve its local coefficient/Jacobian
+agreement. The public configuration remains unchanged: set
+`lambda_jacobian > 0` to enable this behavior.
+
 ## Visualization
 
 The visualization utilities are intended for the XNeural VAR result returned by

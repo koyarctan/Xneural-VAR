@@ -111,3 +111,28 @@ def test_fast_jacobian_penalty_gradient_matches_explicit_autograd():
             atol=1e-10,
             rtol=1e-8,
         )
+
+
+def test_regularization_mismatch_stops_only_causal_gate_gradient():
+    torch.manual_seed(10)
+    model = GVARWithNGCGates(
+        num_vars=2,
+        order=2,
+        hidden_layer_size=4,
+        num_hidden_layers=2,
+    ).double()
+    inputs = torch.randn(3, 2, 2, dtype=torch.float64)
+
+    with torch.no_grad():
+        _, _, _, expected_mismatch = model.forward_with_jacobian(inputs)
+    mismatch = model.coefficient_jacobian_mismatch_for_regularization(inputs)
+
+    assert torch.allclose(mismatch, expected_mismatch, atol=1e-12, rtol=1e-10)
+
+    mismatch.pow(2).mean().backward()
+
+    assert model.causal_gate.grad is None
+    coefficient_gradient = model.coeff_net.weights[0].grad
+    assert coefficient_gradient is not None
+    assert torch.isfinite(coefficient_gradient).all()
+    assert torch.count_nonzero(coefficient_gradient) > 0

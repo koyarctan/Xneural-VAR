@@ -233,7 +233,11 @@ def _epoch(
         inputs = dataset.predictors[batch_idx]
         targets = dataset.responses[batch_idx]
         if use_jacobian:
-            preds, coeffs, _, mismatch = model.forward_with_jacobian(
+            # Prediction and structural sparsity retain their normal gate
+            # gradients.  Only the Jacobian regularizer treats the gate as
+            # fixed, preventing edge deletion from being a shortcut to J=C.
+            preds, coeffs = model(inputs)
+            mismatch = model.coefficient_jacobian_mismatch_for_regularization(
                 inputs,
                 create_graph=train,
             )
